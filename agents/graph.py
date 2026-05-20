@@ -15,7 +15,7 @@ from agents.nodes.data_backup import data_backup_node
 from agents.nodes.context_glossary import context_glossary_node
 from agents.nodes.translator import translator_node
 from utils.drip_feed import drip_feed_emit, emit_log_line, emit_log_lines
-from utils.llm import llm_chunk_with_completeness
+from utils.llm import llm_chunk_with_completeness, split_warmup_tasks
 from agents.nodes.reviewer import reviewer_node
 from agents.nodes.writer import writer_node
 from backend.config import get_xai_api_key
@@ -160,61 +160,74 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
 
                 chunk_items_out.append(item)
 
+            # ko_review 프롬프트는 "변경 없는 행은 포함하지 마세요"라고 명시 → missing은 보통 정상 생략.
+            # 행별 스팸 로그 대신 청크 요약만 남긴다.
             for src in missing:
                 local_missing += 1
-                local_logs.append(
-                    f"[한국어 검수] 응답 누락 — key={src['key']} (row={src.get('_row_index')})"
-                )
                 chunk_items_out.append({
                     "key": src["key"],
                     "original": src[REQUIRED_COLUMNS["korean"]],
                     "revised": src[REQUIRED_COLUMNS["korean"]],
-                    "comment": "AI 검수 응답 누락",
+                    "comment": "",
                     "has_issue": False,
                     "row_index": src.get("_row_index"),
                 })
 
+            suggested = len(chunk_items_out) - local_missing
             local_logs.append(
-                f"[한국어 검수] 청크 {chunk_idx + 1}/{total_ko_chunks} 완료 ({len(chunk)}건)"
+                f"[한국어 검수] 청크 {chunk_idx + 1}/{total_ko_chunks} 완료 "
+                f"— 수정 제안 {suggested}건, 변경 없음 {local_missing}건"
             )
         except Exception as e:
             local_logs.append(f"[한국어 검수] 오류 (청크 {chunk_idx + 1}): {e}")
 
         return chunk_idx, chunk_items_out, usage, local_logs, local_restored, local_missing
 
-    if tasks:
-        with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
-            futures = [exe.submit(_process, *t) for t in tasks]
-            for fut in as_completed(futures):
-                _ci, chunk_items_out, usage, local_logs, local_restored, local_missing = fut.result()
-                with lock:
-                    if usage:
-                        total_input_tokens += usage["input"]
-                        total_output_tokens += usage["output"]
-                        total_reasoning_tokens += usage["reasoning"]
-                        total_cached_tokens += usage["cached"]
-                    logs.extend(local_logs)
-                    emit_log_lines(emitter, local_logs)
-                    restored_count += local_restored
-                    missing_count += local_missing
-                    ko_review_results.extend(chunk_items_out)
+    def _handle_result(result):
+        nonlocal total_input_tokens, total_output_tokens, total_reasoning_tokens
+        nonlocal total_cached_tokens, restored_count, missing_count, cumulative_done
+        _ci, chunk_items_out, usage, local_logs, local_restored, local_missing = result
+        if usage:
+            total_input_tokens += usage["input"]
+            total_output_tokens += usage["output"]
+            total_reasoning_tokens += usage["reasoning"]
+            total_cached_tokens += usage["cached"]
+        logs.extend(local_logs)
+        emit_log_lines(emitter, local_logs)
+        restored_count += local_restored
+        missing_count += local_missing
+        ko_review_results.extend(chunk_items_out)
+        if emitter and chunk_items_out:
+            drip_feed_emit(
+                emitter,
+                "ko_review_chunk",
+                chunk_items_out,
+                progress_base=cumulative_done,
+                total=total_ko_rows,
+            )
+            cumulative_done += len(chunk_items_out)
 
-                    if emitter and chunk_items_out:
-                        drip_feed_emit(
-                            emitter,
-                            "ko_review_chunk",
-                            chunk_items_out,
-                            progress_base=cumulative_done,
-                            total=total_ko_rows,
-                        )
-                        cumulative_done += len(chunk_items_out)
+    if tasks:
+        # warm-up: system_prompt가 1개라 첫 task만 sync 실행 → xAI 캐시 prefix 적재
+        warmup_tasks, rest_tasks = split_warmup_tasks(tasks, prompt_key=lambda t: 0)
+        for t in warmup_tasks:
+            _handle_result(_process(*t))
+        if rest_tasks:
+            with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
+                futures = [exe.submit(_process, *t) for t in rest_tasks]
+                for fut in as_completed(futures):
+                    with lock:
+                        _handle_result(fut.result())
 
     if restored_count:
         line = f"[한국어 검수] 태그 손상 수정 {restored_count}건 원본 복원"
         logs.append(line)
         emit_log_line(emitter, line)
     if missing_count:
-        line = f"[한국어 검수] 응답 누락 {missing_count}건 — 원본 유지"
+        line = (
+            f"[한국어 검수] 변경 없음 {missing_count}건 "
+            f"— LLM이 응답에서 생략 (원본 유지, 정상)"
+        )
         logs.append(line)
         emit_log_line(emitter, line)
     final_line = f"[한국어 검수] 최종 수정 제안: {len([r for r in ko_review_results if r.get('has_issue')])}건"

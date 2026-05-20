@@ -11,6 +11,29 @@ from config.constants import LLM_MODEL
 logger = logging.getLogger("devlocal.llm")
 
 
+def split_warmup_tasks(tasks: list, prompt_key: Callable) -> tuple[list, list]:
+    """
+    청크 작업 목록을 (warmup, rest)로 분리.
+
+    각 unique system_prompt별 첫 task만 warmup으로 보낸다.
+    warmup을 먼저 직렬로 실행하면 xAI 자동 prompt caching이 그 시스템 프롬프트를
+    캐시에 적재하고, 이후 같은 conv_id의 병렬 호출이 캐시 hit이 됨.
+
+    prompt_key: task에서 system_prompt 식별자(id 또는 hash 등)를 추출하는 함수.
+    """
+    seen: set = set()
+    warmup: list = []
+    rest: list = []
+    for t in tasks:
+        k = prompt_key(t)
+        if k not in seen:
+            seen.add(k)
+            warmup.append(t)
+        else:
+            rest.append(t)
+    return warmup, rest
+
+
 def _strip_codeblock(content: str) -> str:
     """LLM 응답 앞뒤 ```...``` 코드블록 마커 제거."""
     content = content.strip()

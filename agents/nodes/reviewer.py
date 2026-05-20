@@ -15,7 +15,7 @@ from config.constants import (
     SUPPORTED_LANGUAGES,
 )
 from utils.drip_feed import drip_feed_emit, emit_log_line, emit_log_lines
-from utils.llm import llm_chunk_with_completeness
+from utils.llm import llm_chunk_with_completeness, split_warmup_tasks
 from config.glossary import format_glossary_text
 from utils.validation import (
     apply_glossary_postprocess,
@@ -329,29 +329,39 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
         )
         return chunk_idx, lang, chunk_results, usage, local_logs
 
+    def _handle_review_result(result):
+        nonlocal total_input_tokens, total_output_tokens, total_reasoning_tokens
+        nonlocal total_cached_tokens, cumulative_done
+        _ci, _lg, chunk_results, usage, local_logs = result
+        if usage:
+            total_input_tokens += usage["input"]
+            total_output_tokens += usage["output"]
+            total_reasoning_tokens += usage["reasoning"]
+            total_cached_tokens += usage["cached"]
+        logs.extend(local_logs)
+        emit_log_lines(emitter, local_logs)
+        new_review_results.extend(chunk_results)
+        if emitter and chunk_results:
+            drip_feed_emit(
+                emitter,
+                "review_chunk",
+                chunk_results,
+                progress_base=cumulative_done,
+                total=progress_total,
+            )
+            cumulative_done += len(chunk_results)
+
     if tasks:
-        with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
-            futures = [exe.submit(_process, *t) for t in tasks]
-            for fut in as_completed(futures):
-                _ci, _lg, chunk_results, usage, local_logs = fut.result()
-                with lock:
-                    if usage:
-                        total_input_tokens += usage["input"]
-                        total_output_tokens += usage["output"]
-                        total_reasoning_tokens += usage["reasoning"]
-                        total_cached_tokens += usage["cached"]
-                    logs.extend(local_logs)
-                    emit_log_lines(emitter, local_logs)
-                    new_review_results.extend(chunk_results)
-                    if emitter and chunk_results:
-                        drip_feed_emit(
-                            emitter,
-                            "review_chunk",
-                            chunk_results,
-                            progress_base=cumulative_done,
-                            total=progress_total,
-                        )
-                        cumulative_done += len(chunk_results)
+        # warm-up: lang별 첫 청크 sync 실행 → xAI 캐시 적재 후 나머지 병렬
+        warmup_tasks, rest_tasks = split_warmup_tasks(tasks, prompt_key=lambda t: t[0])
+        for t in warmup_tasks:
+            _handle_review_result(_process(*t))
+        if rest_tasks:
+            with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
+                futures = [exe.submit(_process, *t) for t in rest_tasks]
+                for fut in as_completed(futures):
+                    with lock:
+                        _handle_review_result(fut.result())
 
     all_review_results = prev_review_results + new_review_results
 

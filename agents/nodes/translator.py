@@ -14,7 +14,7 @@ from config.constants import (
     SUPPORTED_LANGUAGES,
 )
 from utils.drip_feed import drip_feed_emit, emit_log_line, emit_log_lines
-from utils.llm import llm_chunk_with_completeness
+from utils.llm import llm_chunk_with_completeness, split_warmup_tasks
 from config.glossary import format_glossary_text
 
 
@@ -155,20 +155,30 @@ def _translate_retry(state: LocalizationState, needs_retry: list[dict], emitter=
             ]
             return "err", chunk_idx, lang, err_results, None, local_logs
 
+    def _handle_retry_result(result):
+        nonlocal total_input_tokens, total_output_tokens, total_reasoning_tokens
+        nonlocal total_cached_tokens
+        status, _ci, _lg, results, usage, local_logs = result
+        all_results.extend(results)
+        if usage:
+            total_input_tokens += usage["input"]
+            total_output_tokens += usage["output"]
+            total_reasoning_tokens += usage["reasoning"]
+            total_cached_tokens += usage["cached"]
+        logs.extend(local_logs)
+        emit_log_lines(emitter, local_logs)
+
     if tasks:
-        with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
-            futures = [exe.submit(_process, *t) for t in tasks]
-            for fut in as_completed(futures):
-                status, _ci, _lg, results, usage, local_logs = fut.result()
-                with lock:
-                    all_results.extend(results)
-                    if usage:
-                        total_input_tokens += usage["input"]
-                        total_output_tokens += usage["output"]
-                        total_reasoning_tokens += usage["reasoning"]
-                        total_cached_tokens += usage["cached"]
-                    logs.extend(local_logs)
-                    emit_log_lines(emitter, local_logs)
+        # warm-up: lang별 첫 청크를 sync로 → xAI 캐시 적재 후 나머지 병렬
+        warmup_tasks, rest_tasks = split_warmup_tasks(tasks, prompt_key=lambda t: t[0])
+        for t in warmup_tasks:
+            _handle_retry_result(_process(*t))
+        if rest_tasks:
+            with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
+                futures = [exe.submit(_process, *t) for t in rest_tasks]
+                for fut in as_completed(futures):
+                    with lock:
+                        _handle_retry_result(fut.result())
 
     return {
         "translation_results": all_results,
@@ -344,30 +354,40 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
             local_logs.append(f"[Node 3] 번역 오류 (청크 {chunk_idx + 1}, {lang}): {e}")
             return "err", lang, chunk_idx, [], err_results, None, local_logs
 
-    with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
-        futures = [exe.submit(_process, *t) for t in tasks]
-        for fut in as_completed(futures):
-            status, lang, chunk_idx, success_results, miss_results, usage, local_logs = fut.result()
-            with lock:
-                logs.extend(local_logs)
-                emit_log_lines(emitter, local_logs)
-                all_results.extend(success_results)
-                all_results.extend(miss_results)
-                if usage:
-                    total_input_tokens += usage["input"]
-                    total_output_tokens += usage["output"]
-                    total_reasoning_tokens += usage["reasoning"]
-                    total_cached_tokens += usage["cached"]
-                if emitter and success_results:
-                    drip_feed_emit(
-                        emitter,
-                        "translation_chunk",
-                        success_results,
-                        progress_base=cumulative_done,
-                        total=progress_total,
-                        lang=lang,
-                    )
-                    cumulative_done += len(success_results)
+    def _handle_translate_result(result):
+        nonlocal total_input_tokens, total_output_tokens, total_reasoning_tokens
+        nonlocal total_cached_tokens, cumulative_done
+        status, lang, chunk_idx, success_results, miss_results, usage, local_logs = result
+        logs.extend(local_logs)
+        emit_log_lines(emitter, local_logs)
+        all_results.extend(success_results)
+        all_results.extend(miss_results)
+        if usage:
+            total_input_tokens += usage["input"]
+            total_output_tokens += usage["output"]
+            total_reasoning_tokens += usage["reasoning"]
+            total_cached_tokens += usage["cached"]
+        if emitter and success_results:
+            drip_feed_emit(
+                emitter,
+                "translation_chunk",
+                success_results,
+                progress_base=cumulative_done,
+                total=progress_total,
+                lang=lang,
+            )
+            cumulative_done += len(success_results)
+
+    # warm-up: lang별 첫 청크 sync 실행 → xAI 캐시 적재 후 나머지 병렬
+    warmup_tasks, rest_tasks = split_warmup_tasks(tasks, prompt_key=lambda t: t[0])
+    for t in warmup_tasks:
+        _handle_translate_result(_process(*t))
+    if rest_tasks:
+        with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
+            futures = [exe.submit(_process, *t) for t in rest_tasks]
+            for fut in as_completed(futures):
+                with lock:
+                    _handle_translate_result(fut.result())
 
     return {
         "translation_results": all_results,
