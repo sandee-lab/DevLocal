@@ -11,9 +11,6 @@ import type {
   ReviewChunkData,
 } from "../types";
 
-// LLM pricing (config/constants.py와 동일)
-const LLM_PRICING = { input: 0.2 / 1_000_000, output: 0.5 / 1_000_000, cached_input: 0.05 / 1_000_000 };
-
 // 재연결 설정
 const MAX_RECONNECT = 5;
 const BASE_DELAY_MS = 1000;
@@ -203,19 +200,13 @@ export function useSSE() {
         s.setReviewResults(data.review_results);
         s.setFailedRows(data.failed_rows);
         if (data.cost) {
-          const reasoningTokens = data.cost.reasoning_tokens ?? 0;
-          const cachedTokens = data.cost.cached_tokens ?? 0;
-          const nonCachedInput = Math.max(data.cost.input_tokens - cachedTokens, 0);
-          const cost =
-            nonCachedInput * LLM_PRICING.input +
-            cachedTokens * LLM_PRICING.cached_input +
-            (data.cost.output_tokens + reasoningTokens) * LLM_PRICING.output;
+          // backend가 정확한 단가로 estimated_cost_usd까지 계산해서 전달 → 그대로 사용
           s.setCostSummary({
             input_tokens: data.cost.input_tokens,
             output_tokens: data.cost.output_tokens,
-            reasoning_tokens: reasoningTokens,
-            cached_tokens: cachedTokens,
-            estimated_cost_usd: Math.round(cost * 10000) / 10000,
+            reasoning_tokens: data.cost.reasoning_tokens ?? 0,
+            cached_tokens: data.cost.cached_tokens ?? 0,
+            estimated_cost_usd: data.cost.estimated_cost_usd ?? 0,
           });
         }
         s.setProgress(100, "Translation complete");

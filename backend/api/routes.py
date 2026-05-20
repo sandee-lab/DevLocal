@@ -53,6 +53,23 @@ executor = ThreadPoolExecutor(max_workers=4)
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / ".app_config.json"
 
 
+def _build_cost_summary(input_t: int, output_t: int, reasoning_t: int, cached_t: int) -> dict:
+    """토큰 사용량으로 cost summary 생성 — SSE/REST 양쪽 단일 진실 출처."""
+    non_cached_input = max(input_t - cached_t, 0)
+    cost = (
+        non_cached_input * LLM_PRICING["input"]
+        + cached_t * LLM_PRICING["cached_input"]
+        + (output_t + reasoning_t) * LLM_PRICING["output"]
+    )
+    return {
+        "input_tokens": input_t,
+        "output_tokens": output_t,
+        "reasoning_tokens": reasoning_t,
+        "cached_tokens": cached_t,
+        "estimated_cost_usd": round(cost, 4),
+    }
+
+
 def _load_config() -> dict:
     if _CONFIG_PATH.exists():
         try:
@@ -439,12 +456,12 @@ def _run_translation_phase(session, resume_value: str):
             session.translation_report_csv = report_csv
             report_data = report_df.to_dict("records")
 
-        cost_summary = {
-            "input_tokens": result.get("total_input_tokens", 0),
-            "output_tokens": result.get("total_output_tokens", 0),
-            "reasoning_tokens": result.get("total_reasoning_tokens", 0),
-            "cached_tokens": result.get("total_cached_tokens", 0),
-        }
+        cost_summary = _build_cost_summary(
+            result.get("total_input_tokens", 0),
+            result.get("total_output_tokens", 0),
+            result.get("total_reasoning_tokens", 0),
+            result.get("total_cached_tokens", 0),
+        )
 
         emitter("final_review_ready", {
             "review_results": review_results,
@@ -645,19 +662,12 @@ def api_state(session_id: str):
         review_count = len(session.graph_result.get("review_results", []))
         fail_count = len(session.graph_result.get("failed_rows", []))
         total_rows = len(session.graph_result.get("original_data", []))
-        input_t = session.graph_result.get("total_input_tokens", 0)
-        output_t = session.graph_result.get("total_output_tokens", 0)
-        reasoning_t = session.graph_result.get("total_reasoning_tokens", 0)
-        cached_t = session.graph_result.get("total_cached_tokens", 0)
-        non_cached_input = max(input_t - cached_t, 0)
-        cost = (non_cached_input * LLM_PRICING["input"]) + (cached_t * LLM_PRICING["cached_input"]) + ((output_t + reasoning_t) * LLM_PRICING["output"])
-        cost_summary = {
-            "input_tokens": input_t,
-            "output_tokens": output_t,
-            "reasoning_tokens": reasoning_t,
-            "cached_tokens": cached_t,
-            "estimated_cost_usd": round(cost, 4),
-        }
+        cost_summary = _build_cost_summary(
+            session.graph_result.get("total_input_tokens", 0),
+            session.graph_result.get("total_output_tokens", 0),
+            session.graph_result.get("total_reasoning_tokens", 0),
+            session.graph_result.get("total_cached_tokens", 0),
+        )
 
         # 세션 복원용: 테이블 표시를 위한 original_rows (loading/translating 포함)
         orig = session.graph_result.get("original_data", [])
