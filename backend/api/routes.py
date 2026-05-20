@@ -185,13 +185,24 @@ def api_start(req: StartRequest):
 def _make_emitter(session):
     """노드에서 호출할 수 있는 이벤트 emitter 클로저 생성"""
     def emit(event_type: str, data: dict):
+        queue = session.event_queue
+        loop = session._loop
+        if queue is None or loop is None:
+            logger.warning(
+                "emit skipped (queue/loop missing): session=%s event=%s",
+                session.id, event_type,
+            )
+            return
         try:
             asyncio.run_coroutine_threadsafe(
-                session.event_queue.put((event_type, data)),
-                session._loop,
+                queue.put((event_type, data)),
+                loop,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(
+                "emit failed: session=%s event=%s error=%s",
+                session.id, event_type, e,
+            )
     return emit
 
 
@@ -260,13 +271,20 @@ def _run_initial_phase(session):
                 result.get("total_reasoning_tokens", 0),
                 result.get("total_cached_tokens", 0),
             )
-        # row_index 기반 매핑 (중복 Key 대응)
+        # row_index 우선 매핑 (중복 Key 대응) — ko_review_node가 _row_index를 직접 부여하므로
+        # 정상 경로에선 모든 항목이 row_index를 가짐. None은 비정상이므로 로그 후 fallback.
         ko_result_by_ri = {r.get("row_index"): r for r in ko_results_raw if r.get("row_index") is not None}
-        # key 기반 fallback (row_index 없는 경우)
         ko_result_by_key: dict[str, list] = {}
+        orphan_count = 0
         for r in ko_results_raw:
             if r.get("row_index") is None:
                 ko_result_by_key.setdefault(r["key"], []).append(r)
+                orphan_count += 1
+        if orphan_count:
+            logger.warning(
+                "ko_review_results에 row_index 결손 항목 %d개 — key fallback 사용",
+                orphan_count,
+            )
         key_consume: dict[str, int] = {}
 
         original_data = result.get("original_data", [])
@@ -277,22 +295,20 @@ def _run_initial_phase(session):
             ri = row.get("_row_index")
             if ri is not None and ri in ko_result_by_ri:
                 ko_results.append(ko_result_by_ri[ri])
-            elif key in ko_result_by_key:
+                continue
+            # row_index가 없는 항목만 key fallback (비정상 경로)
+            bucket = ko_result_by_key.get(key)
+            if bucket:
                 idx = key_consume.get(key, 0)
-                items = ko_result_by_key[key]
-                if idx < len(items):
-                    ko_results.append(items[idx])
+                if idx < len(bucket):
+                    ko_results.append(bucket[idx])
                     key_consume[key] = idx + 1
-                else:
-                    ko_results.append({
-                        "key": key, "original": ko_text, "revised": ko_text,
-                        "comment": "", "has_issue": False, "row_index": ri,
-                    })
-            else:
-                ko_results.append({
-                    "key": key, "original": ko_text, "revised": ko_text,
-                    "comment": "", "has_issue": False, "row_index": ri,
-                })
+                    continue
+            # 매칭 실패 — 원본 그대로 (변경 없음)
+            ko_results.append({
+                "key": key, "original": ko_text, "revised": ko_text,
+                "comment": "", "has_issue": False, "row_index": ri,
+            })
 
         # KR diff 리포트 생성
         ko_report_data = None
@@ -641,14 +657,21 @@ def api_state(session_id: str):
         # 세션 복원용: HITL 대기 단계일 때 실제 데이터 포함
         if session.current_step == "ko_review":
             ko_results_raw = session.graph_result.get("ko_review_results", [])
-            ko_result_map = {r["key"]: r for r in ko_results_raw}
+            # row_index 우선 매핑 (중복 Key 대응)
+            ko_by_ri = {r.get("row_index"): r for r in ko_results_raw if r.get("row_index") is not None}
+            ko_by_key_first = {}
+            for r in ko_results_raw:
+                ko_by_key_first.setdefault(r.get("key", ""), r)
             original_data = session.graph_result.get("original_data", [])
             ko_review_results = []
             for row in original_data:
                 key = row.get(REQUIRED_COLUMNS["key"], "")
                 ko_text = row.get(REQUIRED_COLUMNS["korean"], "")
-                if key in ko_result_map:
-                    ko_review_results.append(ko_result_map[key])
+                ri = row.get("_row_index")
+                if ri is not None and ri in ko_by_ri:
+                    ko_review_results.append(ko_by_ri[ri])
+                elif key in ko_by_key_first:
+                    ko_review_results.append(ko_by_key_first[key])
                 else:
                     ko_review_results.append({
                         "key": key, "original": ko_text,

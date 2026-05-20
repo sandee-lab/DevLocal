@@ -1,8 +1,6 @@
 """LangGraph 워크플로우 정의 — 6 Node + HITL 2곳 interrupt"""
 
 import re
-import json
-import litellm
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -14,10 +12,11 @@ from agents.nodes.data_backup import data_backup_node
 from agents.nodes.context_glossary import context_glossary_node
 from agents.nodes.translator import translator_node
 from utils.drip_feed import drip_feed_emit
+from utils.llm import llm_chunk_with_completeness
 from agents.nodes.reviewer import reviewer_node
 from agents.nodes.writer import writer_node
 from backend.config import get_xai_api_key
-from config.constants import LLM_MODEL, REQUIRED_COLUMNS, CHUNK_SIZE, TAG_PATTERNS
+from config.constants import REQUIRED_COLUMNS, CHUNK_SIZE, TAG_PATTERNS
 
 
 # ── 한국어 검수 노드 (AI 분석만, interrupt 없음) ─────────────────────
@@ -68,89 +67,93 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
     system_prompt = build_ko_proofreader_prompt()
     total_ko_rows = len(ko_rows)
     processed_count = 0
-    # 태그 검증용 원문 맵 (per-chunk 검증에 사용)
-    original_map = {r["key"]: r[REQUIRED_COLUMNS["korean"]] for r in ko_rows}
-    # row_index 맵 (순서 기반 — 중복 Key 대응)
-    key_to_row_indices: dict[str, list[int]] = {}
-    for r in ko_rows:
-        key_to_row_indices.setdefault(r["key"], []).append(r.get("_row_index"))
-    # 전역 소비 카운터 (청크 간 연속)
-    key_consume_counter: dict[str, int] = {}
     restored_count = 0
+    missing_count = 0
 
-    for chunk_start in range(0, len(ko_rows), CHUNK_SIZE):
-        chunk = ko_rows[chunk_start:chunk_start + CHUNK_SIZE]
-        user_content = "\n\n".join(
+    total_ko_chunks = (len(ko_rows) + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+    def _build_ko_prompt(subset: list[dict]) -> str:
+        return "\n\n".join(
             f"Key: {r['key']}\nKorean: {r[REQUIRED_COLUMNS['korean']]}"
-            for r in chunk
+            for r in subset
         )
 
+    for chunk_idx, chunk_start in enumerate(range(0, len(ko_rows), CHUNK_SIZE)):
+        chunk = ko_rows[chunk_start:chunk_start + CHUNK_SIZE]
+        chunk_items_out: list[dict] = []
+
+        if emitter:
+            emitter("heartbeat", {
+                "node": "ko_review",
+                "lang": "ko",
+                "chunk": chunk_idx + 1,
+                "total_chunks": total_ko_chunks,
+                "chunk_size": len(chunk),
+            })
+
         try:
-            response = litellm.completion(
-                model=LLM_MODEL,
+            pairs, missing, usage = llm_chunk_with_completeness(
+                system_prompt=system_prompt,
+                items=chunk,
+                user_prompt_builder=_build_ko_prompt,
                 api_key=api_key,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
+                item_key_fn=lambda r: r["key"],
                 timeout=120,
             )
 
-            total_input_tokens += getattr(response.usage, "prompt_tokens", 0)
-            total_output_tokens += getattr(
-                response.usage, "completion_tokens", 0
-            )
-            if hasattr(response.usage, "completion_tokens_details") and response.usage.completion_tokens_details:
-                total_reasoning_tokens += getattr(response.usage.completion_tokens_details, "reasoning_tokens", 0) or 0
-            if hasattr(response.usage, "prompt_tokens_details") and response.usage.prompt_tokens_details:
-                total_cached_tokens += getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+            total_input_tokens += usage["input"]
+            total_output_tokens += usage["output"]
+            total_reasoning_tokens += usage["reasoning"]
+            total_cached_tokens += usage["cached"]
 
-            content = response.choices[0].message.content.strip()
-            if content.startswith("```"):
-                content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
-
-            items = json.loads(content)
-            # LLM 필드 변환: changes → comment, has_issue 추가 + row_index 매칭
-            for item in items:
+            for src, item in pairs:
                 item["comment"] = item.pop("changes", "")
                 item["has_issue"] = item.get("original", "") != item.get("revised", "")
-                ikey = item.get("key", "")
-                cidx = key_consume_counter.get(ikey, 0)
-                key_consume_counter[ikey] = cidx + 1
-                ri_list = key_to_row_indices.get(ikey, [])
-                if cidx < len(ri_list):
-                    item["row_index"] = ri_list[cidx]
+                item["row_index"] = src.get("_row_index")
 
-            # Per-chunk 태그 검증 (drip-feed 발행 전)
-            for item in items:
-                if not item["has_issue"]:
-                    continue
-                key = item.get("key", "")
-                original = original_map.get(key, "")
-                revised = item.get("revised", "")
-                if not original or not revised:
-                    continue
-                tag_broken = False
-                for pattern in TAG_PATTERNS:
-                    if sorted(re.findall(pattern, original)) != sorted(re.findall(pattern, revised)):
-                        tag_broken = True
-                        break
-                if tag_broken:
-                    item["revised"] = original
-                    item["has_issue"] = False
-                    item["comment"] = ""
-                    restored_count += 1
+                # 태그 검증 — 손상 시 원본 복원
+                if item["has_issue"]:
+                    original = src[REQUIRED_COLUMNS["korean"]]
+                    revised = item.get("revised", "")
+                    if original and revised:
+                        tag_broken = False
+                        for pattern in TAG_PATTERNS:
+                            if sorted(re.findall(pattern, original)) != sorted(re.findall(pattern, revised)):
+                                tag_broken = True
+                                break
+                        if tag_broken:
+                            item["revised"] = original
+                            item["has_issue"] = False
+                            item["comment"] = ""
+                            restored_count += 1
 
-            ko_review_results.extend(items)
+                chunk_items_out.append(item)
 
-            # 청크별 부분 결과를 1행씩 drip-feed 전송
+            # 응답 누락 — 원본 ko 그대로 + comment 명시
+            for src in missing:
+                missing_count += 1
+                logs.append(
+                    f"[한국어 검수] 응답 누락 — key={src['key']} (row={src.get('_row_index')})"
+                )
+                chunk_items_out.append({
+                    "key": src["key"],
+                    "original": src[REQUIRED_COLUMNS["korean"]],
+                    "revised": src[REQUIRED_COLUMNS["korean"]],
+                    "comment": "AI 검수 응답 누락",
+                    "has_issue": False,
+                    "row_index": src.get("_row_index"),
+                })
+
+            ko_review_results.extend(chunk_items_out)
+
+            # 청크별 부분 결과 emit
             processed_count += len(chunk)
-            if emitter:
+            if emitter and chunk_items_out:
                 drip_feed_emit(
                     emitter,
                     "ko_review_chunk",
-                    items,
-                    progress_base=processed_count - len(items),
+                    chunk_items_out,
+                    progress_base=processed_count - len(chunk_items_out),
                     total=total_ko_rows,
                 )
 
@@ -161,6 +164,10 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
     if restored_count:
         logs.append(
             f"[한국어 검수] 태그 손상 수정 {restored_count}건 원본 복원"
+        )
+    if missing_count:
+        logs.append(
+            f"[한국어 검수] 응답 누락 {missing_count}건 — 원본 유지"
         )
     logs.append(f"[한국어 검수] 최종 수정 제안: {len([r for r in ko_review_results if r.get('has_issue')])}건")
 

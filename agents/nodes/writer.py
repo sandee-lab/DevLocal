@@ -8,42 +8,48 @@ def writer_node(state: LocalizationState) -> dict:
     """
     최종 승인된 번역 데이터를 시트에 일괄 업데이트할 업데이트 목록 생성.
     실제 시트 쓰기는 app.py에서 batch_update_sheet()를 호출하여 수행.
+
+    안전성: row_index가 None인 항목은 잘못된 위치에 쓰는 것보다 안전하게 스킵.
     """
     review_results = state.get("review_results", [])
     failed_rows = state.get("failed_rows", [])
     original_data = state.get("original_data", [])
     logs = list(state.get("logs", []))
 
-    # 원본 데이터의 Key → row_index 매핑 (fallback용)
-    key_to_index = {}
-    for idx, row in enumerate(original_data):
-        key = row.get(REQUIRED_COLUMNS["key"], "")
-        if key not in key_to_index:  # 첫 번째만 (중복 Key fallback)
-            key_to_index[key] = idx
-
     # 검수실패 row_index 집합 먼저 수집 (Tool_Status 충돌 방지)
-    failed_indices = set()
+    failed_indices: set = set()
+    skipped_failed = 0
     for fail in failed_rows:
         ri = fail.get("row_index")
-        if ri is not None:
-            failed_indices.add(ri)
-        else:
-            failed_indices.add(fail["key"])  # fallback
+        if ri is None:
+            skipped_failed += 1
+            continue
+        failed_indices.add(ri)
 
     # 업데이트 목록 생성
     updates = []
-    completed_indices = set()  # Tool_Status 중복 방지
+    completed_indices: set = set()  # Tool_Status 중복 방지
+    skipped_reviews = 0
 
     # 성공한 번역 결과 반영 — 실제 변경된 셀만
     for result in review_results:
         key = result["key"]
         lang = result["lang"]
         translated = result["translated"]
-        # row_index 직접 사용, fallback으로 key lookup
         row_idx = result.get("row_index")
+
         if row_idx is None:
-            row_idx = key_to_index.get(key)
-        if row_idx is None:
+            skipped_reviews += 1
+            logs.append(
+                f"[Node 5] row_index 결손 — 스킵: key={key} lang={lang}"
+            )
+            continue
+
+        if row_idx >= len(original_data):
+            skipped_reviews += 1
+            logs.append(
+                f"[Node 5] row_index 범위 초과 — 스킵: key={key} lang={lang} row={row_idx}"
+            )
             continue
 
         lang_col = SUPPORTED_LANGUAGES.get(lang, "")
@@ -51,7 +57,7 @@ def writer_node(state: LocalizationState) -> dict:
             continue
 
         # 원본 값과 비교 — 실제로 변경된 경우만 업데이트 & 컬러링
-        original_value = original_data[row_idx].get(lang_col, "") if row_idx < len(original_data) else ""
+        original_value = original_data[row_idx].get(lang_col, "")
         if translated != original_value:
             updates.append({
                 "row_index": row_idx,
@@ -60,9 +66,8 @@ def writer_node(state: LocalizationState) -> dict:
                 "change_type": "translation",
             })
 
-        # Tool_Status: 실패 row가 아닌 경우만 최종완료 (실패는 아래에서 처리)
-        fail_id = row_idx if row_idx is not None else key
-        if row_idx not in completed_indices and fail_id not in failed_indices:
+        # Tool_Status: 실패 row가 아닌 경우만 최종완료
+        if row_idx not in completed_indices and row_idx not in failed_indices:
             completed_indices.add(row_idx)
             updates.append({
                 "row_index": row_idx,
@@ -75,21 +80,25 @@ def writer_node(state: LocalizationState) -> dict:
     for fail in failed_rows:
         row_idx = fail.get("row_index")
         if row_idx is None:
-            row_idx = key_to_index.get(fail["key"])
-        if row_idx is not None:
-            updates.append({
-                "row_index": row_idx,
-                "column_name": TOOL_STATUS_COLUMN,
-                "value": Status.REVIEW_FAILED,
-                "change_type": "review_failed",
-            })
+            continue  # 위에서 이미 skipped_failed로 카운트됨
+        updates.append({
+            "row_index": row_idx,
+            "column_name": TOOL_STATUS_COLUMN,
+            "value": Status.REVIEW_FAILED,
+            "change_type": "review_failed",
+        })
 
     changed_count = sum(1 for u in updates if u.get("change_type") == "translation")
-    unchanged_count = len(review_results) - changed_count
-    fail_count = len(failed_rows)
+    unchanged_count = len(review_results) - changed_count - skipped_reviews
+    fail_count = len(failed_rows) - skipped_failed
     logs.append(
-        f"[Node 5] 업데이트 준비: 변경 {changed_count}건, 변경없음 {unchanged_count}건, 실패 {fail_count}건"
+        f"[Node 5] 업데이트 준비: 변경 {changed_count}건, 변경없음 {unchanged_count}건, "
+        f"실패 {fail_count}건"
     )
+    if skipped_reviews or skipped_failed:
+        logs.append(
+            f"[Node 5] row_index 결손으로 스킵: 번역 {skipped_reviews}건, 실패행 {skipped_failed}건"
+        )
 
     return {
         "_updates": updates,

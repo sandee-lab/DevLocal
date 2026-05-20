@@ -1,19 +1,16 @@
 """Node 3: 번역 (LLM) — 청크 단위 번역, Shared Comments 컨텍스트 주입"""
 
-import json
-import litellm
 from langchain_core.runnables import RunnableConfig
 from backend.config import get_xai_api_key
 from agents.state import LocalizationState
 from agents.prompts import build_translator_prompt
 from config.constants import (
     CHUNK_SIZE,
-    LLM_MODEL,
     REQUIRED_COLUMNS,
-    Status,
     SUPPORTED_LANGUAGES,
 )
 from utils.drip_feed import drip_feed_emit
+from utils.llm import llm_chunk_with_completeness
 from config.glossary import format_glossary_text
 
 
@@ -51,7 +48,20 @@ def _build_retry_prompt(items: list[dict], lang: str) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _translate_retry(state: LocalizationState, needs_retry: list[dict]) -> dict:
+def _emit_heartbeat(emitter, node: str, lang: str, chunk_idx: int, total_chunks: int, size: int) -> None:
+    """노드 단위 진행 하트비트 — 프론트 stall 감지용."""
+    if not emitter:
+        return
+    emitter("heartbeat", {
+        "node": node,
+        "lang": lang,
+        "chunk": chunk_idx,
+        "total_chunks": total_chunks,
+        "chunk_size": size,
+    })
+
+
+def _translate_retry(state: LocalizationState, needs_retry: list[dict], emitter=None) -> dict:
     """재시도 모드: 실패한 항목만 재번역"""
     retry_count = dict(state.get("retry_count", {}))
     logs = list(state.get("logs", []))
@@ -86,60 +96,49 @@ def _translate_retry(state: LocalizationState, needs_retry: list[dict]) -> dict:
             end = min(start + CHUNK_SIZE, len(items))
             chunk = items[start:end]
 
-            user_prompt = _build_retry_prompt(chunk, lang)
             logs.append(
                 f"[Node 3] {lang.upper()} 재번역 청크 "
                 f"{chunk_idx + 1}/{total_chunks} ({len(chunk)}건) 처리 중..."
             )
+            _emit_heartbeat(emitter, "translator_retry", lang, chunk_idx + 1, total_chunks, len(chunk))
 
             try:
-                response = litellm.completion(
-                    model=LLM_MODEL,
+                pairs, missing, usage = llm_chunk_with_completeness(
+                    system_prompt=system_prompt,
+                    items=chunk,
+                    user_prompt_builder=lambda subset: _build_retry_prompt(subset, lang),
                     api_key=api_key,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    item_key_fn=lambda it: it["key"],
                     timeout=120,
                 )
 
-                total_input_tokens += getattr(
-                    response.usage, "prompt_tokens", 0
-                )
-                total_output_tokens += getattr(
-                    response.usage, "completion_tokens", 0
-                )
-                if hasattr(response.usage, "completion_tokens_details") and response.usage.completion_tokens_details:
-                    total_reasoning_tokens += getattr(response.usage.completion_tokens_details, "reasoning_tokens", 0) or 0
-                if hasattr(response.usage, "prompt_tokens_details") and response.usage.prompt_tokens_details:
-                    total_cached_tokens += getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                total_input_tokens += usage["input"]
+                total_output_tokens += usage["output"]
+                total_reasoning_tokens += usage["reasoning"]
+                total_cached_tokens += usage["cached"]
 
-                content = response.choices[0].message.content.strip()
-                if content.startswith("```"):
-                    content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
-
-                translated_items = json.loads(content)
-
-                # 재시도 청크의 key→row_index 매핑
-                retry_key_to_ri: dict[str, list] = {}
-                for src in chunk:
-                    retry_key_to_ri.setdefault(src["key"], []).append(src.get("row_index"))
-                retry_key_counter: dict[str, int] = {}
-
-                for ti in translated_items:
+                for src, ti in pairs:
                     translated_text = ti.get("translated", "")
                     translated_text = translated_text.replace('\n', '\\n')
                     translated_text = translated_text.replace('\t', '\\t')
-                    tkey = ti["key"]
-                    cidx = retry_key_counter.get(tkey, 0)
-                    retry_key_counter[tkey] = cidx + 1
-                    ri_list = retry_key_to_ri.get(tkey, [])
-                    ri = ri_list[cidx] if cidx < len(ri_list) else None
                     all_results.append({
-                        "key": tkey,
+                        "key": src["key"],
                         "lang": lang,
                         "translated": translated_text,
-                        "row_index": ri,
+                        "row_index": src.get("row_index"),
+                    })
+
+                # 응답 누락 — 재시도 후에도 매칭 실패한 행은 error로 명시
+                for src in missing:
+                    logs.append(
+                        f"[Node 3] 재번역 응답 누락 — key={src['key']} ({lang})"
+                    )
+                    all_results.append({
+                        "key": src["key"],
+                        "lang": lang,
+                        "translated": "",
+                        "error": "LLM 응답 누락 (재요청 후에도 미반환)",
+                        "row_index": src.get("row_index"),
                     })
 
             except Exception as e:
@@ -181,7 +180,7 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
     # 재시도 모드 확인
     needs_retry = state.get("_needs_retry", [])
     if needs_retry:
-        return _translate_retry(state, needs_retry)
+        return _translate_retry(state, needs_retry, emitter=emitter)
 
     # ── 정상 번역 모드 ──
     original_data = state.get("original_data", [])
@@ -252,75 +251,63 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
             end = min(start + CHUNK_SIZE, len(target_rows))
             chunk = target_rows[start:end]
 
-            user_prompt = _build_translation_prompt(chunk, lang)
             logs.append(
                 f"[Node 3] {lang.upper()} 청크 {chunk_idx + 1}/{total_chunks} "
                 f"({len(chunk)}행) 번역 중..."
             )
+            _emit_heartbeat(emitter, "translator", lang, chunk_idx + 1, total_chunks, len(chunk))
 
             try:
-                response = litellm.completion(
-                    model=LLM_MODEL,
+                pairs, missing, usage = llm_chunk_with_completeness(
+                    system_prompt=system_prompt,
+                    items=chunk,
+                    user_prompt_builder=lambda subset: _build_translation_prompt(subset, lang),
                     api_key=api_key,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    item_key_fn=lambda it: it.get(REQUIRED_COLUMNS["key"], ""),
                     timeout=120,
                 )
 
-                total_input_tokens += getattr(
-                    response.usage, "prompt_tokens", 0
-                )
-                total_output_tokens += getattr(
-                    response.usage, "completion_tokens", 0
-                )
-                if hasattr(response.usage, "completion_tokens_details") and response.usage.completion_tokens_details:
-                    total_reasoning_tokens += getattr(response.usage.completion_tokens_details, "reasoning_tokens", 0) or 0
-                if hasattr(response.usage, "prompt_tokens_details") and response.usage.prompt_tokens_details:
-                    total_cached_tokens += getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
-
-                content = response.choices[0].message.content.strip()
-                # JSON 파싱 — 코드블록 제거
-                if content.startswith("```"):
-                    content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
-
-                translated_items = json.loads(content)
-
-                # 청크 소스 행의 key→row_index 매핑 (순서 기반, 중복 Key 대응)
-                chunk_key_to_ri: dict[str, list[int]] = {}
-                for src_row in chunk:
-                    sk = src_row.get(REQUIRED_COLUMNS["key"], "")
-                    chunk_key_to_ri.setdefault(sk, []).append(src_row.get("_row_index"))
-                chunk_key_counter: dict[str, int] = {}
+                total_input_tokens += usage["input"]
+                total_output_tokens += usage["output"]
+                total_reasoning_tokens += usage["reasoning"]
+                total_cached_tokens += usage["cached"]
 
                 chunk_results = []
-                for item in translated_items:
+                for src_row, item in pairs:
                     translated_text = item.get("translated", "")
                     # Fix: LLM이 JSON에서 \n을 실제 개행으로 출력하는 문제 보정
                     translated_text = translated_text.replace('\n', '\\n')
                     translated_text = translated_text.replace('\t', '\\t')
-                    ikey = item["key"]
-                    cidx = chunk_key_counter.get(ikey, 0)
-                    chunk_key_counter[ikey] = cidx + 1
-                    ri_list = chunk_key_to_ri.get(ikey, [])
-                    ri = ri_list[cidx] if cidx < len(ri_list) else None
                     result_item = {
-                        "key": ikey,
+                        "key": src_row.get(REQUIRED_COLUMNS["key"], ""),
                         "lang": lang,
                         "translated": translated_text,
-                        "row_index": ri,
+                        "row_index": src_row.get("_row_index"),
                     }
                     all_results.append(result_item)
                     chunk_results.append(result_item)
 
-                # 청크별 부분 결과를 1행씩 drip-feed 전송
+                # 응답 누락 — 재요청 후에도 미반환된 행은 error로 명시
+                for src_row in missing:
+                    key = src_row.get(REQUIRED_COLUMNS["key"], "")
+                    logs.append(
+                        f"[Node 3] {lang.upper()} 응답 누락 — key={key} (row={src_row.get('_row_index')})"
+                    )
+                    all_results.append({
+                        "key": key,
+                        "lang": lang,
+                        "translated": "",
+                        "error": "LLM 응답 누락 (재요청 후에도 미반환)",
+                        "row_index": src_row.get("_row_index"),
+                    })
+
+                # 청크별 부분 결과를 단일 이벤트로 즉시 전송 (누락분은 chunk_results에 미포함)
                 if emitter and chunk_results:
                     drip_feed_emit(
                         emitter,
                         "translation_chunk",
                         chunk_results,
-                        progress_base=len(all_results) - len(chunk_results),
+                        progress_base=len(all_results) - len(chunk_results) - len(missing),
                         total=len(target_rows) * len(target_languages),
                         lang=lang,
                     )

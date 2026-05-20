@@ -3,14 +3,14 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 프로젝트 개요
-구글 스프레드시트 기반 게임 텍스트(한국어)를 AI(Grok 4.1 Fast Reasoning)로 다국어(EN, JA) 자동 번역/검수하는 웹앱.
+구글 스프레드시트 기반 게임 텍스트(한국어)를 AI(Grok 4.3)로 다국어(EN, JA) 자동 번역/검수하는 웹앱.
 
 ## 기술 스택
 - **Frontend**: React 19 + Vite + TypeScript + Tailwind CSS v4 + Zustand (SPA)
 - **Backend**: FastAPI + SSE (sse-starlette) + uvicorn
 - **Agent Orchestration**: LangGraph 0.6 (8 Node + HITL 2곳 interrupt)
 - **Google Sheets**: gspread (Batch Read/Write + Exponential Backoff)
-- **LLM**: LiteLLM → xai/grok-4-1-fast-reasoning (timeout=120s)
+- **LLM**: LiteLLM → xai/grok-4.3 (timeout=120s)
 - **Data**: Pandas
 - **Legacy**: Streamlit (app.py — 기존 버전, 별도 실행 가능)
 
@@ -34,7 +34,7 @@ pip install -r backend/requirements.txt         # 백엔드 의존성
 - Google Sheets: 개별 cell.update() 금지 → 반드시 Batch Update
 - Google Sheets: 1회 전체 로드 후 DataFrame 내에서 작업
 - HITL 2단계: 한국어 검수 승인 → 최종 번역 승인 (interrupt 2곳)
-- LLM 호출은 반드시 청크 배치(CHUNK_SIZE=25) + timeout=120s 적용
+- LLM 호출은 반드시 청크 배치(CHUNK_SIZE=50) + timeout=120s 적용
 - Reviewer도 청크 배치 호출 (개별 호출 절대 금지 — rate limit 및 멈춤 원인)
 - 번역 에러 시 그래프 재생성 후 idle로 복구 (translating 멈춤 상태 방지)
 - Writer: 원본 값과 비교하여 실제 변경된 셀만 시트 업데이트 & 컬러링
@@ -48,7 +48,7 @@ pip install -r backend/requirements.txt         # 백엔드 의존성
 - 먼저 해당 단계의 점검 체크리스트를 작성하고, 점검을 통과한 뒤 구현에 들어간다
 
 ## LLM 설정
-- **모델**: `xai/grok-4-1-fast-reasoning` — **CHUNK_SIZE**: 25행 — **timeout**: 120초
+- **모델**: `xai/grok-4.3` — **CHUNK_SIZE**: 50행 — **timeout**: 120초
 - **가격**: input $0.20/1M, output $0.50/1M, cached $0.05/1M
 - **주의**: xAI/Grok은 `completion_tokens`와 `reasoning_tokens`를 별도 리포트 (합산 필요)
 

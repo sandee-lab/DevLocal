@@ -57,6 +57,7 @@ interface AppState {
 
   /* ── SSE Connection ── */
   sseStatus: "connected" | "reconnecting" | "disconnected";
+  lastHeartbeatAt: number | null;
 
   /* ── Settings ── */
   settingsOpen: boolean;
@@ -105,6 +106,7 @@ interface AppState {
   setLogs: (logs: string[]) => void;
   setProgress: (percent: number, label: string) => void;
   setSseStatus: (status: "connected" | "reconnecting" | "disconnected") => void;
+  setLastHeartbeatAt: (ts: number | null) => void;
   setTranslationsApplied: (applied: boolean) => void;
   setIsWritingToSheet: (writing: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -148,6 +150,7 @@ const initialState = {
   progressPercent: 0,
   progressLabel: "",
   sseStatus: "disconnected" as const,
+  lastHeartbeatAt: null as number | null,
   settingsOpen: false,
   helpOpen: false,
   glossary: {} as Record<string, Record<string, string>>,
@@ -216,6 +219,7 @@ export const useAppStore = create<AppState>((set) => ({
   setProgress: (percent, label) =>
     set({ progressPercent: percent, progressLabel: label }),
   setSseStatus: (status) => set({ sseStatus: status }),
+  setLastHeartbeatAt: (ts) => set({ lastHeartbeatAt: ts }),
   setTranslationsApplied: (applied) => set({ translationsApplied: applied }),
   setIsWritingToSheet: (writing) => set({ isWritingToSheet: writing }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),

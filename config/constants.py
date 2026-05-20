@@ -46,13 +46,15 @@ SUPPORTED_LANGUAGES = {
 }
 
 # LLM 번역 청크 크기 (행 수)
-CHUNK_SIZE = 25
+# 50: grok-4.3 + completeness/split 재시도 헬퍼 적용 후 검증된 값
+# (25 대비 처리량 +50%, 단가 -16%, 누락률 0% 유지 — 2026-05 측정)
+CHUNK_SIZE = 50
 
 # Reviewer 최대 재시도 횟수
 MAX_RETRY_COUNT = 3
 
 # LLM 모델 설정
-LLM_MODEL = "xai/grok-4-1-fast-reasoning"
+LLM_MODEL = "xai/grok-4.3"
 LLM_PRICING = {
     "input": 0.20 / 1_000_000,   # $/token
     "output": 0.50 / 1_000_000,  # $/token

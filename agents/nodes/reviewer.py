@@ -1,19 +1,17 @@
 """Node 4: 검수 (LLM + Regex) — 태그 검증, Glossary 후처리, AI 품질 검증 (청크 배치)"""
 
-import json
-import litellm
 from langchain_core.runnables import RunnableConfig
 from backend.config import get_xai_api_key
 from agents.state import LocalizationState
 from agents.prompts import build_reviewer_prompt
 from config.constants import (
     CHUNK_SIZE,
-    LLM_MODEL,
     MAX_RETRY_COUNT,
     REQUIRED_COLUMNS,
     SUPPORTED_LANGUAGES,
 )
 from utils.drip_feed import drip_feed_emit
+from utils.llm import llm_chunk_with_completeness
 from config.glossary import format_glossary_text
 from utils.validation import (
     apply_glossary_postprocess,
@@ -21,6 +19,11 @@ from utils.validation import (
     validate_tags,
 )
 
+
+_REVIEW_USER_PROMPT_SUFFIX = (
+    "\n\n위 번역들을 각각 검수하고, "
+    "기존 번역 대비 변경 사유를 포함하여 JSON 배열로 출력하세요."
+)
 
 
 def _build_review_prompt_batch(items_for_review: list[dict]) -> str:
@@ -34,7 +37,7 @@ def _build_review_prompt_batch(items_for_review: list[dict]) -> str:
             f"기존 번역: {item['old_translation']}"
         )
         parts.append(part)
-    return "\n\n---\n\n".join(parts)
+    return "\n\n---\n\n".join(parts) + _REVIEW_USER_PROMPT_SUFFIX
 
 
 def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
@@ -68,11 +71,17 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
     game_synopsis = state.get("game_synopsis", "")
     tone_and_manner = state.get("tone_and_manner", "")
 
-    # 원본 데이터 맵 구축
-    original_map = {}
+    # 원본 데이터 인덱싱 — row_index 우선 (중복 Key 시 정확한 ko 텍스트 보호),
+    # key 기반은 row_index 결손 항목 fallback용
+    original_by_ri: dict[int, dict] = {}
+    original_map: dict[str, dict] = {}
     for row in original_data:
+        ri = row.get("_row_index")
+        if ri is not None:
+            original_by_ri[ri] = row
         key = row.get(REQUIRED_COLUMNS["key"], "")
-        original_map[key] = row
+        if key and key not in original_map:
+            original_map[key] = row
 
     api_key = get_xai_api_key()
 
@@ -98,7 +107,15 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
         if not translated:
             continue
 
-        original_row = original_map.get(key, {})
+        # 원본 행 조회 — row_index 우선, 누락 시 key fallback
+        if row_index is not None and row_index in original_by_ri:
+            original_row = original_by_ri[row_index]
+        else:
+            original_row = original_map.get(key, {})
+            if row_index is not None:
+                logs.append(
+                    f"[Node 4] row_index 결손 → key fallback — {key} (row={row_index})"
+                )
         source_ko = original_row.get(REQUIRED_COLUMNS["korean"], "")
 
         # Glossary 후처리
@@ -205,74 +222,76 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
             end = min(start + CHUNK_SIZE, len(items))
             chunk = items[start:end]
 
-            user_prompt = _build_review_prompt_batch(chunk)
-            user_prompt += (
-                "\n\n위 번역들을 각각 검수하고, "
-                "기존 번역 대비 변경 사유를 포함하여 JSON 배열로 출력하세요."
-            )
-
             logs.append(
                 f"[Node 4] {lang.upper()} 검수 청크 {chunk_idx + 1}/{total_chunks} "
                 f"({len(chunk)}건) 처리 중..."
             )
+            if emitter:
+                emitter("heartbeat", {
+                    "node": "reviewer",
+                    "lang": lang,
+                    "chunk": chunk_idx + 1,
+                    "total_chunks": total_chunks,
+                    "chunk_size": len(chunk),
+                })
 
-            # LLM 호출
-            chunk_ai_map: dict[str, dict] = {}
+            # LLM 호출 — JSON 파싱 실패 시 분할, 응답 누락 시 재요청
+            ai_by_item_id: dict[int, dict] = {}
+            missing_items: list[dict] = []
             try:
-                response = litellm.completion(
-                    model=LLM_MODEL,
+                pairs, missing_items, usage = llm_chunk_with_completeness(
+                    system_prompt=system_prompt,
+                    items=chunk,
+                    user_prompt_builder=_build_review_prompt_batch,
                     api_key=api_key,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    item_key_fn=lambda it: it["key"],
                     timeout=120,
                 )
 
-                total_input_tokens += getattr(response.usage, "prompt_tokens", 0)
-                total_output_tokens += getattr(
-                    response.usage, "completion_tokens", 0
-                )
-                if hasattr(response.usage, "completion_tokens_details") and response.usage.completion_tokens_details:
-                    total_reasoning_tokens += getattr(response.usage.completion_tokens_details, "reasoning_tokens", 0) or 0
-                if hasattr(response.usage, "prompt_tokens_details") and response.usage.prompt_tokens_details:
-                    total_cached_tokens += getattr(response.usage.prompt_tokens_details, "cached_tokens", 0) or 0
+                total_input_tokens += usage["input"]
+                total_output_tokens += usage["output"]
+                total_reasoning_tokens += usage["reasoning"]
+                total_cached_tokens += usage["cached"]
 
-                content = response.choices[0].message.content.strip()
-                if content.startswith("```"):
-                    content = content.split("\n", 1)[-1].rsplit("```", 1)[0]
-
-                review_items = json.loads(content)
-                if isinstance(review_items, list):
-                    for ri in review_items:
-                        ri_key = ri.get("key", "")
-                        chunk_ai_map[ri_key] = ri
+                for src, ai in pairs:
+                    ai_by_item_id[id(src)] = ai
 
             except Exception as e:
                 logs.append(
                     f"[Node 4] AI 검수 오류 (청크 {chunk_idx + 1}): {e}"
                 )
+                # 예외 시 모든 chunk 항목이 미매칭 — 정규식 통과분은 reason 비워서 유지
+                missing_items = list(chunk)
 
             # 이 청크의 결과 즉시 결합
             chunk_results = []
             for item in chunk:
                 key = item["key"]
                 warnings = list(item["warnings"])
+                ai_result = ai_by_item_id.get(id(item))
 
-                ai_result = chunk_ai_map.get(key, {})
-                reason = ai_result.get("reason", "")
-
-                if ai_result.get("status") == "fail":
-                    ai_issues = ai_result.get("issues", [])
-                    warnings.extend(ai_issues)
-                    logs.append(
-                        f"[Node 4] AI 검수 경고 — {key} ({lang}): {'; '.join(ai_issues)}"
-                    )
-
-                if warnings and not reason:
-                    reason = "; ".join(warnings)
-                elif warnings and reason:
-                    reason = f"{reason} | 경고: {'; '.join(warnings)}"
+                if ai_result is None:
+                    # AI 검수 응답 누락 — 정규식·glossary는 통과했으니 번역은 적용,
+                    # 단 reason에 명시하여 수동 검토를 유도
+                    reason_parts = list(warnings)
+                    if item in missing_items:
+                        reason_parts.append("AI 검수 응답 누락 — 수동 검토 권장")
+                        logs.append(
+                            f"[Node 4] AI 검수 응답 누락 — {key} ({lang})"
+                        )
+                    reason = "; ".join(reason_parts)
+                else:
+                    reason = ai_result.get("reason", "")
+                    if ai_result.get("status") == "fail":
+                        ai_issues = ai_result.get("issues", [])
+                        warnings.extend(ai_issues)
+                        logs.append(
+                            f"[Node 4] AI 검수 경고 — {key} ({lang}): {'; '.join(ai_issues)}"
+                        )
+                    if warnings and not reason:
+                        reason = "; ".join(warnings)
+                    elif warnings and reason:
+                        reason = f"{reason} | 경고: {'; '.join(warnings)}"
 
                 chunk_results.append({
                     "key": key,

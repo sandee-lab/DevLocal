@@ -123,6 +123,11 @@ export function useSSE() {
         store().setOriginalRows(data.rows);
       });
 
+      /* ── 노드 하트비트 (stall 감지) ── */
+      es.addEventListener("heartbeat", () => {
+        store().setLastHeartbeatAt(Date.now());
+      });
+
       /* ── 한국어 검수 — 청크별 부분 결과 ── */
       es.addEventListener("ko_review_chunk", (e) => {
         const data: KoReviewChunkData = JSON.parse(e.data);

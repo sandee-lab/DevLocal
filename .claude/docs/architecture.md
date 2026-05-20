@@ -44,7 +44,7 @@ agents/
   nodes/                  # data_backup, context_glossary, translator, reviewer, writer
 
 config/
-  constants.py            # 상수 (CHUNK_SIZE=25, LLM_MODEL, 태그패턴 등)
+  constants.py            # 상수 (CHUNK_SIZE=50, LLM_MODEL, 태그패턴 등)
   glossary.py             # 언어별 Glossary 딕셔너리 + 기본값
 
 utils/
