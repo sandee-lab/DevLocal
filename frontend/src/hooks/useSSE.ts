@@ -128,6 +128,18 @@ export function useSSE() {
         store().setLastHeartbeatAt(Date.now());
       });
 
+      /* ── 라이브 로그 라인 (LogsModal 실시간 갱신용) ── */
+      es.addEventListener("log_line", (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (typeof data.text === "string" && data.text) {
+            store().addLog(data.text);
+          }
+        } catch {
+          /* malformed event — ignore */
+        }
+      });
+
       /* ── 한국어 검수 — 청크별 부분 결과 ── */
       es.addEventListener("ko_review_chunk", (e) => {
         const data: KoReviewChunkData = JSON.parse(e.data);

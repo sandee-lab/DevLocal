@@ -73,6 +73,17 @@ export function getSessionState(sessionId: string) {
   return request<SessionStateResponse>(`/state/${sessionId}`);
 }
 
+/* ── Backend Logs (디버그) ── */
+export interface LogsResponse {
+  session_id: string;
+  current_step: string;
+  logs: string[];
+}
+
+export function getLogs(sessionId: string) {
+  return request<LogsResponse>(`/logs/${sessionId}`);
+}
+
 /* ── Downloads ── */
 export function getDownloadUrl(sessionId: string, fileType: string) {
   return `${BASE}/download/${sessionId}/${fileType}`;

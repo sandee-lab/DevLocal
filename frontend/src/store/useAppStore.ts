@@ -67,6 +67,9 @@ interface AppState {
   /* ── Help ── */
   helpOpen: boolean;
 
+  /* ── Logs (디버그) ── */
+  logsOpen: boolean;
+
   /* ── All Sheets Mode ── */
   allSheetsMode: boolean;
   sheetQueue: string[];
@@ -113,6 +116,7 @@ interface AppState {
   setGlossary: (glossary: Record<string, Record<string, string>>) => void;
   setCustomPrompts: (prompts: Record<string, string>) => void;
   setHelpOpen: (open: boolean) => void;
+  setLogsOpen: (open: boolean) => void;
   setAllSheetsMode: (on: boolean) => void;
   setSheetQueue: (queue: string[]) => void;
   advanceSheetQueue: () => void;
@@ -153,6 +157,7 @@ const initialState = {
   lastHeartbeatAt: null as number | null,
   settingsOpen: false,
   helpOpen: false,
+  logsOpen: false,
   glossary: {} as Record<string, Record<string, string>>,
   customPrompts: {} as Record<string, string>,
   allSheetsMode: false,
@@ -224,6 +229,7 @@ export const useAppStore = create<AppState>((set) => ({
   setIsWritingToSheet: (writing) => set({ isWritingToSheet: writing }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setHelpOpen: (open) => set({ helpOpen: open }),
+  setLogsOpen: (open) => set({ logsOpen: open }),
   setGlossary: (glossary) => set({ glossary }),
   setCustomPrompts: (prompts) => set({ customPrompts: prompts }),
   setAllSheetsMode: (on) => set({ allSheetsMode: on }),

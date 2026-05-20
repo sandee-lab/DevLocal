@@ -8,6 +8,7 @@ import type { AppStep } from "./types";
 import Header from "./components/Header";
 import SettingsModal from "./components/SettingsModal";
 import HelpModal from "./components/HelpModal";
+import LogsModal from "./components/LogsModal";
 import ToastContainer from "./components/Toast";
 import DataSourceScreen from "./screens/DataSourceScreen";
 import KoReviewWorkspace from "./screens/KoReviewWorkspace";
@@ -177,6 +178,7 @@ export default function App() {
       <AnimatedScreen />
       <SettingsModal />
       <HelpModal />
+      <LogsModal />
       <ToastContainer />
     </div>
   );

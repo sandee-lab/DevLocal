@@ -183,8 +183,22 @@ def api_start(req: StartRequest):
 # ── SSE Stream ───────────────────────────────────────────────────────
 
 def _make_emitter(session):
-    """노드에서 호출할 수 있는 이벤트 emitter 클로저 생성"""
+    """노드에서 호출할 수 있는 이벤트 emitter 클로저 생성.
+
+    log_line 이벤트는 session.logs에도 실시간 append (lock 보호) →
+    LogsModal이 polling으로 phase 진행 중에도 라이브 로그를 볼 수 있게 함.
+    """
     def emit(event_type: str, data: dict):
+        # log_line 인터셉트 — session.logs에 라이브 추가
+        if event_type == "log_line" and isinstance(data, dict):
+            text = data.get("text", "")
+            if text:
+                try:
+                    with session.lock:
+                        session.logs.append(text)
+                except Exception as e:
+                    logger.warning("log_line append failed: %s", e)
+
         queue = session.event_queue
         loop = session._loop
         if queue is None or loop is None:
@@ -695,6 +709,22 @@ def api_state(session_id: str):
         original_rows=original_rows_data,
         total_rows=total_rows,
     )
+
+
+# ── Logs (디버그) ─────────────────────────────────────────────────────
+
+@router.get("/logs/{session_id}")
+def api_logs(session_id: str):
+    """세션 누적 로그 조회 (UI 디버그 버튼용)."""
+    session = session_manager.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return {
+        "session_id": session_id,
+        "current_step": session.current_step,
+        "logs": session.logs or [],
+    }
 
 
 # ── Downloads ────────────────────────────────────────────────────────

@@ -50,13 +50,19 @@ SUPPORTED_LANGUAGES = {
 # (25 대비 처리량 +50%, 단가 -16%, 누락률 0% 유지 — 2026-05 측정)
 CHUNK_SIZE = 50
 
+# 한 단계(ko_review/translator/reviewer) 내에서 동시에 실행하는 LLM chunk 수
+# 4: xAI Grok rate limit 안전 + 큰 시트(1000행+) 체감 4배 단축
+LLM_CHUNK_PARALLELISM = 4
+
 # Reviewer 최대 재시도 횟수
 MAX_RETRY_COUNT = 3
 
 # LLM 모델 설정
 LLM_MODEL = "xai/grok-4.3"
+# 단가 출처: xAI 공식 모델 페이지 / OpenRouter (2026-05 확인)
+# input/output은 공식, cached_input은 xAI 일반 정책 "10% of cache-miss rate" 인용
 LLM_PRICING = {
-    "input": 0.20 / 1_000_000,   # $/token
-    "output": 0.50 / 1_000_000,  # $/token
-    "cached_input": 0.05 / 1_000_000,
+    "input": 1.25 / 1_000_000,        # $/token
+    "output": 2.50 / 1_000_000,       # $/token  (reasoning_tokens 포함 합산)
+    "cached_input": 0.125 / 1_000_000,
 }

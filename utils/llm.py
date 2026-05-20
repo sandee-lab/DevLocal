@@ -56,12 +56,17 @@ def llm_json_call(
     user_prompt: str,
     api_key: str,
     timeout: int = 120,
+    conv_id: str | None = None,
 ) -> tuple[list, dict]:
     """
     단일 LLM 호출 + JSON 파싱.
     반환: (parsed_items_list, usage_dict)
     예외: json.JSONDecodeError, litellm 오류 등은 그대로 raise.
+
+    conv_id: xAI Grok prompt caching 친화 라우팅 키. 같은 값을 가진
+    요청은 같은 서버로 라우팅되어 캐시 prefix를 공유 → cached_tokens 증가.
     """
+    extra_headers = {"x-grok-conv-id": conv_id} if conv_id else None
     response = litellm.completion(
         model=LLM_MODEL,
         api_key=api_key,
@@ -70,12 +75,21 @@ def llm_json_call(
             {"role": "user", "content": user_prompt},
         ],
         timeout=timeout,
+        extra_headers=extra_headers,
     )
     content = _strip_codeblock(response.choices[0].message.content)
     parsed = json.loads(content)
     if not isinstance(parsed, list):
         parsed = [parsed]
-    return parsed, _extract_usage(response)
+    usage = _extract_usage(response)
+    if usage["input"]:
+        cached = usage["cached"]
+        hit_ratio = (cached / usage["input"] * 100) if usage["input"] else 0
+        logger.info(
+            "LLM usage: input=%d output=%d cached=%d (hit %.1f%%) conv_id=%s",
+            usage["input"], usage["output"], cached, hit_ratio, conv_id or "-",
+        )
+    return parsed, usage
 
 
 def llm_json_call_with_split(
@@ -84,6 +98,7 @@ def llm_json_call_with_split(
     user_prompt_builder: Callable[[list], str],
     api_key: str,
     timeout: int = 120,
+    conv_id: str | None = None,
     _depth: int = 0,
     _max_depth: int = 6,
 ) -> tuple[list, dict]:
@@ -97,7 +112,7 @@ def llm_json_call_with_split(
     user_prompt = user_prompt_builder(items)
 
     try:
-        return llm_json_call(system_prompt, user_prompt, api_key, timeout)
+        return llm_json_call(system_prompt, user_prompt, api_key, timeout, conv_id=conv_id)
     except json.JSONDecodeError as e:
         if len(items) <= 1 or _depth >= _max_depth:
             logger.error(
@@ -113,11 +128,11 @@ def llm_json_call_with_split(
         )
         left, left_usage = llm_json_call_with_split(
             system_prompt, items[:mid], user_prompt_builder, api_key, timeout,
-            _depth=_depth + 1, _max_depth=_max_depth,
+            conv_id=conv_id, _depth=_depth + 1, _max_depth=_max_depth,
         )
         right, right_usage = llm_json_call_with_split(
             system_prompt, items[mid:], user_prompt_builder, api_key, timeout,
-            _depth=_depth + 1, _max_depth=_max_depth,
+            conv_id=conv_id, _depth=_depth + 1, _max_depth=_max_depth,
         )
         return left + right, _combine_usage(left_usage, right_usage)
 
@@ -131,6 +146,7 @@ def llm_chunk_with_completeness(
     response_key_fn: Callable[[dict], str] = None,
     timeout: int = 120,
     max_retries: int = 2,
+    conv_id: str | None = None,
 ) -> tuple[list[tuple[dict, dict]], list[dict], dict]:
     """
     LLM 호출 + 응답 무결성 검증. 누락된 요청 항목만 재요청 (최대 max_retries회).
@@ -170,6 +186,7 @@ def llm_chunk_with_completeness(
                 user_prompt_builder=user_prompt_builder,
                 api_key=api_key,
                 timeout=timeout,
+                conv_id=conv_id,
             )
         except Exception as e:
             logger.error(

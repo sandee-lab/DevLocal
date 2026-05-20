@@ -27,7 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.config import get_xai_api_key
-from config.constants import LLM_MODEL, CHUNK_SIZE
+from config.constants import LLM_MODEL, CHUNK_SIZE, LLM_PRICING
 from utils.llm import llm_json_call, llm_json_call_with_split
 
 
@@ -150,10 +150,12 @@ def chunk_efficiency_test(size: int) -> dict:
                     tag_violations += 1
 
     throughput = size / elapsed if elapsed > 0 else 0
+    # cached_tokens는 prompt_tokens에 이미 포함 → 차감 후 cached 단가 별도 적용
+    non_cached_input = max(usage["input"] - usage["cached"], 0)
     cost_usd = (
-        usage["input"] * 0.20 / 1_000_000
-        + usage["cached"] * 0.05 / 1_000_000
-        + (usage["output"] + usage["reasoning"]) * 0.50 / 1_000_000
+        non_cached_input * LLM_PRICING["input"]
+        + usage["cached"] * LLM_PRICING["cached_input"]
+        + (usage["output"] + usage["reasoning"]) * LLM_PRICING["output"]
     )
     print(f"  OK: {elapsed:.2f}s ({throughput:.1f} 행/s)")
     print(f"  반환: {len(result)}건 / 요청: {size}건 (누락 {len(missing)}, 추가 {len(extras)}, 누락률 {miss_rate*100:.1f}%)")

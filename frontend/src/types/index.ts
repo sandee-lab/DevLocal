@@ -76,7 +76,6 @@ export interface ReviewItem {
   old_translation: string;
   translated: string;
   reason: string;
-  status: string;
   row_index?: number;
 }
 

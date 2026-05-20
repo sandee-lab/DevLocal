@@ -1,6 +1,26 @@
 """SSE 청크 emit 유틸 — 청크 결과를 단일 이벤트로 즉시 전송."""
 
 
+def emit_log_line(emitter, text: str) -> None:
+    """단일 로그 라인을 log_line SSE 이벤트로 전송.
+
+    백엔드 _make_emitter가 이를 인터셉트하여 session.logs에도 append하므로,
+    LogsModal polling 시 phase 진행 중에도 라이브 로그가 보임.
+    """
+    if not emitter or not text:
+        return
+    emitter("log_line", {"text": text})
+
+
+def emit_log_lines(emitter, lines: list[str]) -> None:
+    """여러 로그 라인을 순서대로 전송."""
+    if not emitter or not lines:
+        return
+    for ln in lines:
+        if ln:
+            emitter("log_line", {"text": ln})
+
+
 def drip_feed_emit(
     emitter,
     event_name: str,

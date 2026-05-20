@@ -1,6 +1,9 @@
 """LangGraph 워크플로우 정의 — 6 Node + HITL 2곳 interrupt"""
 
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -11,12 +14,12 @@ from agents.prompts import build_ko_proofreader_prompt
 from agents.nodes.data_backup import data_backup_node
 from agents.nodes.context_glossary import context_glossary_node
 from agents.nodes.translator import translator_node
-from utils.drip_feed import drip_feed_emit
+from utils.drip_feed import drip_feed_emit, emit_log_line, emit_log_lines
 from utils.llm import llm_chunk_with_completeness
 from agents.nodes.reviewer import reviewer_node
 from agents.nodes.writer import writer_node
 from backend.config import get_xai_api_key
-from config.constants import REQUIRED_COLUMNS, CHUNK_SIZE, TAG_PATTERNS
+from config.constants import REQUIRED_COLUMNS, CHUNK_SIZE, LLM_CHUNK_PARALLELISM, SUPPORTED_LANGUAGES, TAG_PATTERNS
 
 
 # ── 한국어 검수 노드 (AI 분석만, interrupt 없음) ─────────────────────
@@ -27,6 +30,8 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
     interrupt는 별도 ko_approval_node에서 처리.
     """
     original_data = state.get("original_data", [])
+    mode = state.get("mode", "A")
+    target_languages = state.get("target_languages", [])
     logs = list(state.get("logs", []))
     total_input_tokens = state.get("total_input_tokens", 0)
     total_output_tokens = state.get("total_output_tokens", 0)
@@ -35,11 +40,15 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
 
     # 청크별 이벤트 emitter (없으면 무시)
     emitter = config.get("configurable", {}).get("event_emitter") if config else None
+    # xAI Grok prompt caching 라우팅 키 — 같은 thread_id 요청을 같은 서버로 보내 캐시 prefix 공유
+    conv_id = config.get("configurable", {}).get("thread_id") if config else None
 
     # ── Fast path: Cancel 복귀 시 캐시된 결과 재사용 (LLM 스킵) ──
     existing_results = state.get("ko_review_results", [])
     if existing_results:
-        logs.append(f"[한국어 검수] 캐시 결과 사용: {len(existing_results)}행 (스킵)")
+        line = f"[한국어 검수] 캐시 결과 사용: {len(existing_results)}행 (스킵)"
+        logs.append(line)
+        emit_log_line(emitter, line)
         return {
             "ko_review_results": existing_results,
             "total_input_tokens": total_input_tokens,
@@ -51,22 +60,37 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
 
     api_key = get_xai_api_key()
 
-    # 한국어 원문 수집
+    # 한국어 원문 수집 — Mode B는 신규 번역 대상(타겟 언어 중 하나라도 빈칸)인 행만
+    target_lang_cols = [SUPPORTED_LANGUAGES.get(lg, "") for lg in target_languages]
+    target_lang_cols = [c for c in target_lang_cols if c]
     ko_rows = []
+    skipped_by_mode_b = 0
     for row in original_data:
         key = row.get(REQUIRED_COLUMNS["key"], "")
         ko_text = row.get(REQUIRED_COLUMNS["korean"], "")
         row_index = row.get("_row_index")
-        if ko_text:
-            ko_rows.append({"key": key, REQUIRED_COLUMNS["korean"]: ko_text, "_row_index": row_index})
+        if not ko_text:
+            continue
+        if mode == "B" and target_lang_cols:
+            needs_translation = any(
+                not (row.get(col, "") or "").strip() for col in target_lang_cols
+            )
+            if not needs_translation:
+                skipped_by_mode_b += 1
+                continue
+        ko_rows.append({"key": key, REQUIRED_COLUMNS["korean"]: ko_text, "_row_index": row_index})
 
+    if skipped_by_mode_b:
+        skip_line = f"[한국어 검수] Mode B 스킵: 이미 모든 타겟 언어 채워진 행 {skipped_by_mode_b}건"
+        logs.append(skip_line)
+        emit_log_line(emitter, skip_line)
     logs.append(f"[한국어 검수] 대상: {len(ko_rows)}행")
+    emit_log_line(emitter, f"[한국어 검수] 대상: {len(ko_rows)}행")
 
-    # 청크 단위로 AI 검수
-    ko_review_results = []
+    # 청크 단위로 AI 검수 (병렬 실행)
+    ko_review_results: list[dict] = []
     system_prompt = build_ko_proofreader_prompt()
     total_ko_rows = len(ko_rows)
-    processed_count = 0
     restored_count = 0
     missing_count = 0
 
@@ -78,10 +102,15 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
             for r in subset
         )
 
+    # 작업 평탄화: (chunk_idx, chunk)
+    tasks: list[tuple[int, list[dict]]] = []
     for chunk_idx, chunk_start in enumerate(range(0, len(ko_rows), CHUNK_SIZE)):
-        chunk = ko_rows[chunk_start:chunk_start + CHUNK_SIZE]
-        chunk_items_out: list[dict] = []
+        tasks.append((chunk_idx, ko_rows[chunk_start:chunk_start + CHUNK_SIZE]))
 
+    lock = threading.Lock()
+    cumulative_done = 0
+
+    def _process(chunk_idx: int, chunk: list[dict]):
         if emitter:
             emitter("heartbeat", {
                 "node": "ko_review",
@@ -91,6 +120,12 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
                 "chunk_size": len(chunk),
             })
 
+        chunk_items_out: list[dict] = []
+        local_logs: list[str] = []
+        local_restored = 0
+        local_missing = 0
+        usage = None
+
         try:
             pairs, missing, usage = llm_chunk_with_completeness(
                 system_prompt=system_prompt,
@@ -99,12 +134,8 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
                 api_key=api_key,
                 item_key_fn=lambda r: r["key"],
                 timeout=120,
+                conv_id=conv_id,
             )
-
-            total_input_tokens += usage["input"]
-            total_output_tokens += usage["output"]
-            total_reasoning_tokens += usage["reasoning"]
-            total_cached_tokens += usage["cached"]
 
             for src, item in pairs:
                 item["comment"] = item.pop("changes", "")
@@ -125,14 +156,13 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
                             item["revised"] = original
                             item["has_issue"] = False
                             item["comment"] = ""
-                            restored_count += 1
+                            local_restored += 1
 
                 chunk_items_out.append(item)
 
-            # 응답 누락 — 원본 ko 그대로 + comment 명시
             for src in missing:
-                missing_count += 1
-                logs.append(
+                local_missing += 1
+                local_logs.append(
                     f"[한국어 검수] 응답 누락 — key={src['key']} (row={src.get('_row_index')})"
                 )
                 chunk_items_out.append({
@@ -144,32 +174,52 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
                     "row_index": src.get("_row_index"),
                 })
 
-            ko_review_results.extend(chunk_items_out)
-
-            # 청크별 부분 결과 emit
-            processed_count += len(chunk)
-            if emitter and chunk_items_out:
-                drip_feed_emit(
-                    emitter,
-                    "ko_review_chunk",
-                    chunk_items_out,
-                    progress_base=processed_count - len(chunk_items_out),
-                    total=total_ko_rows,
-                )
-
+            local_logs.append(
+                f"[한국어 검수] 청크 {chunk_idx + 1}/{total_ko_chunks} 완료 ({len(chunk)}건)"
+            )
         except Exception as e:
-            processed_count += len(chunk)
-            logs.append(f"[한국어 검수] 오류: {e}")
+            local_logs.append(f"[한국어 검수] 오류 (청크 {chunk_idx + 1}): {e}")
+
+        return chunk_idx, chunk_items_out, usage, local_logs, local_restored, local_missing
+
+    if tasks:
+        with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
+            futures = [exe.submit(_process, *t) for t in tasks]
+            for fut in as_completed(futures):
+                _ci, chunk_items_out, usage, local_logs, local_restored, local_missing = fut.result()
+                with lock:
+                    if usage:
+                        total_input_tokens += usage["input"]
+                        total_output_tokens += usage["output"]
+                        total_reasoning_tokens += usage["reasoning"]
+                        total_cached_tokens += usage["cached"]
+                    logs.extend(local_logs)
+                    emit_log_lines(emitter, local_logs)
+                    restored_count += local_restored
+                    missing_count += local_missing
+                    ko_review_results.extend(chunk_items_out)
+
+                    if emitter and chunk_items_out:
+                        drip_feed_emit(
+                            emitter,
+                            "ko_review_chunk",
+                            chunk_items_out,
+                            progress_base=cumulative_done,
+                            total=total_ko_rows,
+                        )
+                        cumulative_done += len(chunk_items_out)
 
     if restored_count:
-        logs.append(
-            f"[한국어 검수] 태그 손상 수정 {restored_count}건 원본 복원"
-        )
+        line = f"[한국어 검수] 태그 손상 수정 {restored_count}건 원본 복원"
+        logs.append(line)
+        emit_log_line(emitter, line)
     if missing_count:
-        logs.append(
-            f"[한국어 검수] 응답 누락 {missing_count}건 — 원본 유지"
-        )
-    logs.append(f"[한국어 검수] 최종 수정 제안: {len([r for r in ko_review_results if r.get('has_issue')])}건")
+        line = f"[한국어 검수] 응답 누락 {missing_count}건 — 원본 유지"
+        logs.append(line)
+        emit_log_line(emitter, line)
+    final_line = f"[한국어 검수] 최종 수정 제안: {len([r for r in ko_review_results if r.get('has_issue')])}건"
+    logs.append(final_line)
+    emit_log_line(emitter, final_line)
 
     return {
         "ko_review_results": ko_review_results,

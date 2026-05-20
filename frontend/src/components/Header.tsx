@@ -8,6 +8,7 @@ export default function Header() {
   const sheetQueue = useAppStore((s) => s.sheetQueue);
   const currentSheetIndex = useAppStore((s) => s.currentSheetIndex);
   const totalSheetCount = useAppStore((s) => s.totalSheetCount);
+  const setLogsOpen = useAppStore((s) => s.setLogsOpen);
 
   const statusConfig = {
     connected: { dot: "bg-emerald-500 animate-dot-pulse", label: "Connected" },
@@ -43,8 +44,20 @@ export default function Header() {
         )}
       </div>
 
-      {/* Right side: connection status */}
-      <div className="min-w-[240px] flex justify-end">
+      {/* Right side: logs + connection status */}
+      <div className="min-w-[240px] flex justify-end items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setLogsOpen(true)}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-lg border border-border-subtle text-text-muted hover:text-text-main transition-colors"
+          title="백엔드 로그 보기"
+          aria-label="View backend logs"
+        >
+          <span className="material-symbols-outlined text-base" aria-hidden="true">
+            terminal
+          </span>
+          <span className="text-xs font-medium">Logs</span>
+        </button>
         {currentStep !== "idle" && (
           currentStep === "done" ? (
             <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 rounded-lg border border-emerald-200">
