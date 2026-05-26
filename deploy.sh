@@ -74,7 +74,7 @@ gcloud run deploy "$SERVICE_NAME" \
     --allow-unauthenticated \
     --memory 512Mi \
     --timeout 300 \
-    --max-instances 2 \
+    --max-instances 5 \
     --env-vars-file "$ENV_FILE" \
     --quiet
 
