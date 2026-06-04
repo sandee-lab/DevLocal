@@ -2,14 +2,9 @@ import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { getConfig, saveConfig } from "../api/client";
 import { useFocusTrap } from "../hooks/useFocusTrap";
+import { unifiedKeys } from "../utils/glossary";
 
 type Tab = "prompting" | "glossary";
-type GlossaryLang = "ja" | "en";
-
-const LANG_LABELS: Record<GlossaryLang, string> = {
-  ja: "Japanese (JA)",
-  en: "English (EN)",
-};
 
 export default function SettingsModal() {
   const open = useAppStore((s) => s.settingsOpen);
@@ -26,13 +21,16 @@ export default function SettingsModal() {
   const [localGlossary, setLocalGlossary] = useState<
     Record<string, Record<string, string>>
   >({});
-  const [glossaryLang, setGlossaryLang] = useState<GlossaryLang>("ja");
-  const [newSource, setNewSource] = useState("");
-  const [newTarget, setNewTarget] = useState("");
+  const [newKo, setNewKo] = useState("");
+  const [newEn, setNewEn] = useState("");
+  const [newJa, setNewJa] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importNotice, setImportNotice] = useState("");
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const backdropRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useFocusTrap(panelRef, open);
 
@@ -66,26 +64,84 @@ export default function SettingsModal() {
 
   if (!open) return null;
 
-  const currentEntries = Object.entries(localGlossary[glossaryLang] ?? {});
+  // KO 합집합 기준 통합 행 (ko, en, ja)
+  const rows = unifiedKeys(localGlossary).map((ko) => ({
+    ko,
+    en: localGlossary.en?.[ko] ?? "",
+    ja: localGlossary.ja?.[ko] ?? "",
+  }));
 
   function handleAddEntry() {
-    const src = newSource.trim();
-    const tgt = newTarget.trim();
-    if (!src || !tgt) return;
-    setLocalGlossary((prev) => ({
-      ...prev,
-      [glossaryLang]: { ...prev[glossaryLang], [src]: tgt },
-    }));
-    setNewSource("");
-    setNewTarget("");
+    const ko = newKo.trim();
+    const en = newEn.trim();
+    const ja = newJa.trim();
+    if (!ko || (!en && !ja)) return; // KO 필수 + 최소 한 개 대상언어
+    setLocalGlossary((prev) => {
+      const next = { ...prev, en: { ...prev.en }, ja: { ...prev.ja } };
+      if (en) next.en[ko] = en;
+      else delete next.en[ko];
+      if (ja) next.ja[ko] = ja;
+      else delete next.ja[ko];
+      return next;
+    });
+    setNewKo("");
+    setNewEn("");
+    setNewJa("");
   }
 
-  function handleDeleteEntry(key: string) {
+  function handleDeleteEntry(ko: string) {
     setLocalGlossary((prev) => {
-      const langEntries = { ...prev[glossaryLang] };
-      delete langEntries[key];
-      return { ...prev, [glossaryLang]: langEntries };
+      const next = { ...prev, en: { ...prev.en }, ja: { ...prev.ja } };
+      delete next.en[ko];
+      delete next.ja[ko];
+      return next;
     });
+  }
+
+  // 인라인 편집 — 대상언어(en/ja) 셀 값 변경. 빈 값이면 해당 언어 키 제거.
+  function handleEditTarget(ko: string, lang: "en" | "ja", value: string) {
+    setLocalGlossary((prev) => {
+      const langMap = { ...(prev[lang] ?? {}) };
+      if (value.trim()) langMap[ko] = value;
+      else delete langMap[ko];
+      return { ...prev, [lang]: langMap };
+    });
+  }
+
+  async function handleExport() {
+    const { exportGlossaryFile } = await import("../utils/glossaryFile");
+    exportGlossaryFile(localGlossary);
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (e.target) e.target.value = ""; // 같은 파일 재선택 허용
+    if (!file) return;
+    setImportError("");
+    setImportNotice("");
+    try {
+      const { parseGlossaryFile } = await import("../utils/glossaryFile");
+      const { glossary, stats } = await parseGlossaryFile(file);
+      const warnings = [];
+      if (stats.jaCount === 0)
+        warnings.push("⚠ JA 0개 — 기존 JA 단어집이 모두 사라집니다.");
+      if (stats.enCount === 0)
+        warnings.push("⚠ EN 0개 — 기존 EN 단어집이 모두 사라집니다.");
+      const summary =
+        `불러오기: JA ${stats.jaCount}개 · EN ${stats.enCount}개` +
+        (stats.skippedRows ? ` · 한국어 빈 행 ${stats.skippedRows}개 건너뜀` : "");
+      const ok = window.confirm(
+        `${summary}\n\n현재 단어집을 이 내용으로 전체 교체합니다. 계속할까요?` +
+          (warnings.length ? `\n\n${warnings.join("\n")}` : ""),
+      );
+      if (!ok) return;
+      setLocalGlossary(glossary);
+      setImportNotice(`${summary} — 저장하려면 [Save Settings]를 누르세요.`);
+    } catch (err) {
+      setImportError(
+        err instanceof Error ? err.message : "파일을 읽을 수 없습니다.",
+      );
+    }
   }
 
   async function handleSave() {
@@ -280,96 +336,161 @@ export default function SettingsModal() {
                 </p>
               </div>
 
-              {/* Language selector */}
-              <div className="flex gap-2">
-                {(Object.keys(LANG_LABELS) as GlossaryLang[]).map((lang) => (
-                  <button
-                    type="button"
-                    key={lang}
-                    onClick={() => setGlossaryLang(lang)}
-                    className={`px-4 py-2 text-sm font-medium rounded-lg border transition-all duration-200 ${
-                      glossaryLang === lang
-                        ? "bg-primary/10 border-primary/30 text-primary"
-                        : "bg-white border-slate-200 text-text-muted hover:border-slate-300 hover:text-text-main"
-                    }`}
-                  >
-                    {LANG_LABELS[lang]}
-                  </button>
-                ))}
+              {/* Bulk import / export toolbar */}
+              <div className="flex flex-wrap items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-3">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleFileSelected}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-semibold rounded-lg bg-primary text-white hover:bg-primary-dark transition-colors shadow-sm"
+                >
+                  <span className="material-symbols-outlined text-base" aria-hidden="true">
+                    upload_file
+                  </span>
+                  \uD30C\uC77C \uC5C5\uB85C\uB4DC (.xlsx/.csv)
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium rounded-lg bg-white border border-slate-200 text-text-muted hover:text-text-main hover:border-slate-300 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-base" aria-hidden="true">
+                    download
+                  </span>
+                  \uB0B4\uBCF4\uB0B4\uAE30 / \uD15C\uD50C\uB9BF
+                </button>
+                <span className="text-xs text-text-muted ml-auto">
+                  ko / en / jp 3\uC5F4 \u00B7 \uBE48 \uCE78\uC740 \uBB34\uC2DC \u00B7 \uC5C5\uB85C\uB4DC \uC2DC \uC804\uCCB4 \uAD50\uCCB4
+                </span>
               </div>
 
-              {/* Add new entry */}
-              <div className="flex gap-3 items-end">
+              {importError && (
+                <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 p-3 rounded-lg border border-red-100">
+                  <span className="material-symbols-outlined text-sm mt-0.5" aria-hidden="true">
+                    error
+                  </span>
+                  <span>{importError}</span>
+                </div>
+              )}
+              {importNotice && (
+                <div className="flex items-start gap-2 text-xs text-emerald-700 bg-emerald-50 p-3 rounded-lg border border-emerald-100">
+                  <span className="material-symbols-outlined text-sm mt-0.5" aria-hidden="true">
+                    check_circle
+                  </span>
+                  <span>{importNotice}</span>
+                </div>
+              )}
+
+              {/* Add new entry \u2014 KO / EN / JA */}
+              <div className="flex gap-2 items-end">
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-text-muted mb-1.5">
                     Source (KO)
                   </label>
                   <input
                     type="text"
-                    value={newSource}
-                    onChange={(e) => setNewSource(e.target.value)}
+                    value={newKo}
+                    onChange={(e) => setNewKo(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleAddEntry()}
-                    placeholder="e.g., ..."
+                    placeholder="e.g., \uC804\uC124"
                     className="w-full rounded-lg border border-slate-200 bg-white py-2.5 px-3 text-sm text-text-main placeholder:text-slate-400 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                   />
                 </div>
-                <span className="text-slate-300 font-medium pb-2.5">{"\u2192"}</span>
                 <div className="flex-1">
                   <label className="block text-xs font-medium text-text-muted mb-1.5">
-                    Target ({glossaryLang.toUpperCase()})
+                    EN
                   </label>
                   <input
                     type="text"
-                    value={newTarget}
-                    onChange={(e) => setNewTarget(e.target.value)}
+                    value={newEn}
+                    onChange={(e) => setNewEn(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleAddEntry()}
-                    placeholder={
-                      glossaryLang === "ja" ? "e.g., \u4F1D\u8AAC" : "e.g., Legend"
-                    }
+                    placeholder="e.g., Legend"
+                    className="w-full rounded-lg border border-slate-200 bg-white py-2.5 px-3 text-sm text-text-main placeholder:text-slate-400 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-text-muted mb-1.5">
+                    JA
+                  </label>
+                  <input
+                    type="text"
+                    value={newJa}
+                    onChange={(e) => setNewJa(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleAddEntry()}
+                    placeholder="e.g., \u4F1D\u8AAC"
                     className="w-full rounded-lg border border-slate-200 bg-white py-2.5 px-3 text-sm text-text-main placeholder:text-slate-400 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
                   />
                 </div>
                 <button
                   type="button"
                   onClick={handleAddEntry}
-                  disabled={!newSource.trim() || !newTarget.trim()}
+                  disabled={!newKo.trim() || (!newEn.trim() && !newJa.trim())}
                   className="shrink-0 p-2.5 rounded-lg bg-primary text-white hover:bg-primary-dark disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <span className="material-symbols-outlined text-lg" aria-hidden="true">add</span>
                 </button>
               </div>
 
-              {/* Glossary table */}
-              {currentEntries.length > 0 ? (
+              {/* Glossary table \u2014 unified KO / EN / JA */}
+              {rows.length > 0 ? (
                 <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <table className="w-full text-sm">
+                  <table className="w-full text-sm table-fixed">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider">
+                        <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider w-1/3">
                           Source (KO)
                         </th>
                         <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider">
-                          Target ({glossaryLang.toUpperCase()})
+                          EN
+                        </th>
+                        <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider">
+                          JA
                         </th>
                         <th scope="col" className="w-12" />
                       </tr>
                     </thead>
                     <tbody>
-                      {currentEntries.map(([source, target]) => (
+                      {rows.map((row) => (
                         <tr
-                          key={source}
+                          key={row.ko}
                           className="border-b border-slate-100 last:border-0 hover:bg-slate-50/50 transition-colors"
                         >
-                          <td className="py-2.5 px-4 text-text-main font-medium">
-                            {source}
+                          <td className="py-1.5 px-4 text-text-main font-medium break-words">
+                            {row.ko}
                           </td>
-                          <td className="py-2.5 px-4 text-text-main">
-                            {target}
+                          <td className="py-1.5 px-2">
+                            <input
+                              type="text"
+                              value={row.en}
+                              onChange={(e) =>
+                                handleEditTarget(row.ko, "en", e.target.value)
+                              }
+                              placeholder="\u2014"
+                              className="w-full rounded-md border border-transparent bg-transparent py-1.5 px-2 text-sm text-text-main hover:border-slate-200 focus:bg-white focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                            />
                           </td>
-                          <td className="py-2.5 px-2">
+                          <td className="py-1.5 px-2">
+                            <input
+                              type="text"
+                              value={row.ja}
+                              onChange={(e) =>
+                                handleEditTarget(row.ko, "ja", e.target.value)
+                              }
+                              placeholder="\u2014"
+                              className="w-full rounded-md border border-transparent bg-transparent py-1.5 px-2 text-sm text-text-main hover:border-slate-200 focus:bg-white focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                            />
+                          </td>
+                          <td className="py-1.5 px-2 text-center">
                             <button
                               type="button"
-                              onClick={() => handleDeleteEntry(source)}
+                              onClick={() => handleDeleteEntry(row.ko)}
                               className="p-1 text-slate-400 hover:text-red-500 rounded transition-colors"
                             >
                               <span className="material-symbols-outlined text-base" aria-hidden="true">
@@ -387,9 +508,9 @@ export default function SettingsModal() {
                   <span className="material-symbols-outlined text-3xl text-slate-300 mb-2 block" aria-hidden="true">
                     book_2
                   </span>
-                  No glossary entries for {LANG_LABELS[glossaryLang]} yet.
+                  \uB2E8\uC5B4\uC9D1\uC774 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.
                   <br />
-                  Add terms above to enforce consistent translations.
+                  \uD30C\uC77C\uC744 \uC5C5\uB85C\uB4DC\uD558\uAC70\uB098 \uC704\uC5D0\uC11C \uC9C1\uC811 \uCD94\uAC00\uD558\uC138\uC694.
                 </div>
               )}
             </div>
