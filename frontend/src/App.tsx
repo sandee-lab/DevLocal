@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAppStore } from "./store/useAppStore";
 import { useSSE } from "./hooks/useSSE";
 import { useSheetQueue } from "./hooks/useSheetQueue";
@@ -45,46 +45,43 @@ const TRANSLATION_STEPS = new Set<AppStep>(["translating", "final_review"]);
 function AnimatedScreen() {
   const currentStep = useAppStore((s) => s.currentStep);
   const [displayedStep, setDisplayedStep] = useState(currentStep);
-  const [phase, setPhase] = useState<"idle" | "exit" | "enter">("idle");
-  const prevStepRef = useRef(currentStep);
+  const [entering, setEntering] = useState(false);
 
+  // 같은 통합 컴포넌트 내 전환 — 슬라이드 스킵, 렌더 중 상태 조정 (re-render before commit)
+  const sameGroup =
+    (KO_REVIEW_STEPS.has(displayedStep) && KO_REVIEW_STEPS.has(currentStep)) ||
+    (TRANSLATION_STEPS.has(displayedStep) && TRANSLATION_STEPS.has(currentStep));
+  if (currentStep !== displayedStep && sameGroup) {
+    setDisplayedStep(currentStep);
+  }
+
+  // 그룹 간 전환 — exit 단계는 currentStep ≠ displayedStep에서 파생
+  const exiting = currentStep !== displayedStep && !sameGroup;
+
+  // Exit phase: 400ms 후 새 화면으로 교체하고 enter 시작
   useEffect(() => {
-    if (currentStep === prevStepRef.current) return;
-    const prev = prevStepRef.current;
-    prevStepRef.current = currentStep;
-
-    // 같은 통합 컴포넌트 내 전환 — 슬라이드 스킵
-    const sameGroup =
-      (KO_REVIEW_STEPS.has(prev) && KO_REVIEW_STEPS.has(currentStep)) ||
-      (TRANSLATION_STEPS.has(prev) && TRANSLATION_STEPS.has(currentStep));
-    if (sameGroup) {
-      setDisplayedStep(currentStep);
-      return;
-    }
-
-    // Exit phase
-    setPhase("exit");
-
+    if (!exiting) return;
     const exitTimer = setTimeout(() => {
       setDisplayedStep(currentStep);
-      setPhase("enter");
-
-      const enterTimer = setTimeout(() => {
-        setPhase("idle");
-      }, 400);
-
-      return () => clearTimeout(enterTimer);
+      setEntering(true);
     }, 400);
-
     return () => clearTimeout(exitTimer);
-  }, [currentStep]);
+  }, [exiting, currentStep]);
 
-  const animClass =
-    phase === "exit"
-      ? "animate-fade-slide-left"
-      : phase === "enter"
-        ? "animate-fade-slide-right"
-        : "";
+  // Enter phase: 400ms 후 idle 복귀
+  useEffect(() => {
+    if (!entering) return;
+    const enterTimer = setTimeout(() => setEntering(false), 400);
+    return () => clearTimeout(enterTimer);
+  }, [entering]);
+
+  const animClass = exiting
+    ? "animate-fade-slide-left"
+    : entering
+      ? "animate-fade-slide-right"
+      : "";
+
+  const phase = exiting ? "exit" : entering ? "enter" : "idle";
 
   return (
     <div
@@ -98,7 +95,12 @@ function AnimatedScreen() {
 
 export default function App() {
   const currentStep = useAppStore((s) => s.currentStep);
-  const [restoring, setRestoring] = useState(false);
+  // 복원 필요 여부를 초기값에서 직접 파생 — effect에서 동기 setState 방지
+  const [restoring, setRestoring] = useState(
+    () =>
+      !!localStorage.getItem("devlocal_session_id") &&
+      !useAppStore.getState().sessionId,
+  );
 
   // SSE를 App 레벨에서 유지 — 화면 전환에도 연결 유지
   useSSE();
@@ -111,11 +113,10 @@ export default function App() {
 
   // 마운트 시 세션 복원 — localStorage에 저장된 sessionId로 상태 복구
   useEffect(() => {
+    if (!restoring) return;
     const savedId = localStorage.getItem("devlocal_session_id");
-    const store = useAppStore.getState();
-    if (!savedId || store.sessionId) return;
+    if (!savedId) return;
 
-    setRestoring(true);
     // 5초 타임아웃 — 백엔드 무응답 시 idle로 복귀
     const timeout = setTimeout(() => {
       localStorage.removeItem("devlocal_session_id");
@@ -160,7 +161,7 @@ export default function App() {
       .finally(() => setRestoring(false));
 
     return () => clearTimeout(timeout);
-  }, []);
+  }, [restoring]);
 
   if (restoring) {
     return (

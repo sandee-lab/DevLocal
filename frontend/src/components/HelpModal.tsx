@@ -11,40 +11,45 @@ export default function HelpModal() {
   const setOpen = useAppStore((s) => s.setHelpOpen);
   const botEmail = useAppStore((s) => s.botEmail);
 
-  const [sections, setSections] = useState<GuideSection[]>([]);
+  // null = 아직 한 번도 로드되지 않음 → loading 파생 (effect 내 동기 setState 방지)
+  const [sections, setSections] = useState<GuideSection[] | null>(null);
   const [activeTab, setActiveTab] = useState("");
   const [copied, setCopied] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [email, setEmail] = useState("");
+  const [fetchedEmail, setFetchedEmail] = useState("");
   const backdropRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   useFocusTrap(panelRef, open);
 
-  // Load guide when modal opens
+  const loading = open && sections === null;
+  // Bot email: prefer Zustand, fallback to /api/config fetch result
+  const email = botEmail || fetchedEmail;
+
+  // Load guide when modal opens (재오픈 시에도 refetch — 첫 로드 전까지만 스피너)
   useEffect(() => {
     if (!open) return;
-    setLoading(true);
+    let cancelled = false;
     getGuide()
       .then((res) => {
+        if (cancelled) return;
         setSections(res.sections);
-        if (res.sections.length > 0 && !activeTab) {
-          setActiveTab(res.sections[0].id);
+        if (res.sections.length > 0) {
+          setActiveTab((tab) => tab || res.sections[0].id);
         }
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (!cancelled) setSections([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
-  // Resolve bot email: prefer Zustand, fallback to /api/config
+  // Resolve bot email fallback — Zustand에 없을 때만 /api/config 조회
   useEffect(() => {
-    if (!open) return;
-    if (botEmail) {
-      setEmail(botEmail);
-      return;
-    }
+    if (!open || botEmail) return;
     getConfig()
-      .then((cfg) => setEmail(cfg.bot_email ?? ""))
+      .then((cfg) => setFetchedEmail(cfg.bot_email ?? ""))
       .catch(() => {});
   }, [open, botEmail]);
 
@@ -60,7 +65,7 @@ export default function HelpModal() {
 
   if (!open) return null;
 
-  const activeSection = sections.find((s) => s.id === activeTab);
+  const activeSection = sections?.find((s) => s.id === activeTab);
 
   async function handleCopy() {
     if (!email) return;
@@ -130,7 +135,7 @@ export default function HelpModal() {
         )}
 
         {/* Tab bar */}
-        {sections.length > 0 && (
+        {sections && sections.length > 0 && (
           <div className="px-8 pt-4 pb-2 shrink-0">
             <div role="tablist" className="flex gap-0.5 overflow-x-auto bg-slate-100/80 rounded-xl p-1.5 border border-slate-200 scrollbar-hide">
               {sections.map((s) => (
