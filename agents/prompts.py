@@ -1,5 +1,6 @@
 """시스템 프롬프트 — 세계관, 톤앤매너, 가이드라인 (설정은 .app_config.json에서 로드)"""
 
+from config.constants import LANGUAGE_PROMPT_LABELS
 from config.glossary import get_game_synopsis, get_tone_and_manner
 
 
@@ -13,6 +14,7 @@ def build_translator_prompt(
     """Translator Agent 시스템 프롬프트 생성"""
     synopsis = synopsis or get_game_synopsis()
     tone = tone or get_tone_and_manner()
+    target_label = LANGUAGE_PROMPT_LABELS.get(target_lang, target_lang)
 
     custom_section = ""
     if custom_prompt:
@@ -30,7 +32,7 @@ def build_translator_prompt(
 {tone}
 
 ## 타겟 언어
-{target_lang}
+{target_label}
 
 ## Glossary (고유명사 고정 규칙)
 {glossary_text}{custom_section}
@@ -71,6 +73,7 @@ def build_reviewer_prompt(
     """Reviewer Agent 시스템 프롬프트 생성"""
     synopsis = synopsis or get_game_synopsis()
     tone = tone or get_tone_and_manner()
+    target_label = LANGUAGE_PROMPT_LABELS.get(target_lang, target_lang)
 
     custom_section = ""
     if custom_prompt:
@@ -91,7 +94,7 @@ def build_reviewer_prompt(
 {tone}
 
 ## 타겟 언어
-{target_lang}
+{target_label}
 
 ## Glossary (고유명사 고정 규칙)
 {glossary_text}{custom_section}

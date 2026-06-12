@@ -155,7 +155,7 @@ export default function DataSourceScreen() {
         sheet_url: sheetUrl,
         sheet_name: sheetName,
         mode,
-        target_languages: ["en", "ja"],
+        target_languages: [], // 빈 배열 = 시트에 컬럼이 존재하는 모든 지원 언어 (백엔드 자동 결정)
         row_start: allSheetsMode ? 0 : rowStart,
         row_end: allSheetsMode ? 0 : rowEnd,
       });

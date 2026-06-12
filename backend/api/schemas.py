@@ -18,7 +18,7 @@ class StartRequest(BaseModel):
     sheet_url: str
     sheet_name: str
     mode: str = "A"
-    target_languages: list = ["en", "ja"]
+    target_languages: list = []  # 비어 있으면 시트에 존재하는 모든 지원 언어로 자동 결정
     row_start: int = 0
     row_end: int = 0
 

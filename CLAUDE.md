@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 프로젝트 개요
-구글 스프레드시트 기반 게임 텍스트(한국어)를 AI(Grok 4.3)로 다국어(EN, JA) 자동 번역/검수하는 웹앱.
+구글 스프레드시트 기반 게임 텍스트(한국어)를 AI(Grok 4.3)로 다국어(EN, JA, ZH-CN, ZH-TW) 자동 번역/검수하는 웹앱.
 
 ## 기술 스택
 - **Frontend**: React 19 + Vite + TypeScript + Tailwind CSS v4 + Zustand (SPA)
@@ -29,6 +29,7 @@ pip install -r backend/requirements.txt         # 백엔드 의존성
 - Dockerfile: 멀티스테이지 (Node 22 → Python 3.11-slim), Cloud Run 단일 컨테이너
 
 ## 핵심 규칙
+- 타겟 언어는 `SUPPORTED_LANGUAGES`(config/constants.py)가 단일 출처 — 시트에 해당 컬럼(`English(en)`/`Japanese(ja)`/`Chinese_CN(zh-CN)`/`Chinese_TW(zh-TW)`)이 존재하는 언어만 자동 번역 (타겟 컬럼은 필수 아님, 프론트는 빈 target_languages 전송)
 - 포맷팅 태그({변수}, <color>, \n 등) 보존은 정규식 하드코딩으로 검증 (LLM 의존 X)
 - JA 등급명은 Glossary 강제 치환 (의역 절대 금지)
 - Google Sheets: 개별 cell.update() 금지 → 반드시 Batch Update

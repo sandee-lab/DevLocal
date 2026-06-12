@@ -31,7 +31,7 @@ export function useSheetQueue() {
           sheet_url: s.sheetUrl,
           sheet_name: nextSheet,
           mode: s.mode,
-          target_languages: ["en", "ja"],
+          target_languages: [], // 빈 배열 = 시트에 컬럼이 존재하는 모든 지원 언어 (백엔드 자동 결정)
           row_start: 0,
           row_end: 0,
         });

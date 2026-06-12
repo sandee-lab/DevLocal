@@ -30,19 +30,27 @@ TAG_PATTERNS = [
     r'\\t',                 # 탭
 ]
 
-# 필수 컬럼명
+# 필수 컬럼명 — 타겟 언어 컬럼은 필수가 아님 (시트에 존재하는 언어만 번역 대상)
 REQUIRED_COLUMNS = {
     "key": "Key",
     "shared_comments": "Shared Comments",
     "korean": "Korean(ko)",
-    "english": "English(en)",
-    "japanese": "Japanese(ja)",
 }
 
-# 지원 언어 목록
+# 지원 언어 목록 (언어코드 → 시트 컬럼 헤더명 — 시트 컬럼명과 정확히 일치해야 함)
 SUPPORTED_LANGUAGES = {
     "en": "English(en)",
     "ja": "Japanese(ja)",
+    "zh-CN": "Chinese_CN(zh-CN)",
+    "zh-TW": "Chinese_TW(zh-TW)",
+}
+
+# 프롬프트용 언어 표기 — LLM이 간체/번체 문자 체계를 혼동하지 않도록 명시
+LANGUAGE_PROMPT_LABELS = {
+    "en": "English (en)",
+    "ja": "日本語 / Japanese (ja)",
+    "zh-CN": "简体中文 / Simplified Chinese (zh-CN) — 반드시 간체자만 사용",
+    "zh-TW": "繁體中文 / Traditional Chinese (zh-TW) — 반드시 번체자만 사용",
 }
 
 # LLM 번역 청크 크기 (행 수)

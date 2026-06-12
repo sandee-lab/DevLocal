@@ -7,6 +7,8 @@ import {
 } from "../api/client";
 import { useCountUp } from "../hooks/useCountUp";
 import { highlightDiff } from "../utils/diffHighlight";
+import { TARGET_LANG_LABELS } from "../utils/glossary";
+import type { TargetLang } from "../utils/glossary";
 import Footer from "../components/Footer";
 import ConfirmModal from "../components/ConfirmModal";
 
@@ -676,7 +678,7 @@ export default function TranslationWorkspace() {
                                 : "text-text-muted hover:bg-slate-100"
                             }`}
                           >
-                            {lang.toUpperCase()}
+                            {TARGET_LANG_LABELS[lang as TargetLang] ?? lang.toUpperCase()}
                           </button>
                         ))}
                       </div>

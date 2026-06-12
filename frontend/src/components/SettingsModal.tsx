@@ -1,10 +1,21 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { getConfig, saveConfig } from "../api/client";
 import { useFocusTrap } from "../hooks/useFocusTrap";
-import { unifiedKeys } from "../utils/glossary";
+import { TARGET_LANGS, TARGET_LANG_LABELS, unifiedKeys } from "../utils/glossary";
+import type { Glossary, TargetLang } from "../utils/glossary";
 
 type Tab = "prompting" | "glossary";
+
+type EntryDraft = Record<"ko" | TargetLang, string>;
+const EMPTY_ENTRY: EntryDraft = { ko: "", en: "", ja: "", "zh-CN": "", "zh-TW": "" };
+const ADD_FIELDS: { key: keyof EntryDraft; label: string; placeholder: string }[] = [
+  { key: "ko", label: "Source (KO)", placeholder: "e.g., 전설" },
+  { key: "en", label: "EN", placeholder: "e.g., Legend" },
+  { key: "ja", label: "JA", placeholder: "e.g., 伝説" },
+  { key: "zh-CN", label: "CN (간체)", placeholder: "e.g., 传说" },
+  { key: "zh-TW", label: "TW (번체)", placeholder: "e.g., 傳說" },
+];
 
 export default function SettingsModal() {
   const open = useAppStore((s) => s.settingsOpen);
@@ -18,12 +29,8 @@ export default function SettingsModal() {
   const [synopsisText, setSynopsisText] = useState("");
   const [toneText, setToneText] = useState("");
   const [promptText, setPromptText] = useState("");
-  const [localGlossary, setLocalGlossary] = useState<
-    Record<string, Record<string, string>>
-  >({});
-  const [newKo, setNewKo] = useState("");
-  const [newEn, setNewEn] = useState("");
-  const [newJa, setNewJa] = useState("");
+  const [localGlossary, setLocalGlossary] = useState<Glossary>({});
+  const [newEntry, setNewEntry] = useState<EntryDraft>(EMPTY_ENTRY);
   const [importError, setImportError] = useState("");
   const [importNotice, setImportNotice] = useState("");
   const [saving, setSaving] = useState(false);
@@ -62,44 +69,48 @@ export default function SettingsModal() {
     }
   }, [selectedSheet, open, loaded]);
 
+  // KO 합집합 기준 통합 행 — 인라인 편집 키 입력마다 재계산하지 않도록 memo
+  const rows = useMemo(
+    () =>
+      unifiedKeys(localGlossary).map((ko) => {
+        const row = { ko } as { ko: string } & Record<TargetLang, string>;
+        for (const lang of TARGET_LANGS) row[lang] = localGlossary[lang]?.[ko] ?? "";
+        return row;
+      }),
+    [localGlossary],
+  );
+
   if (!open) return null;
 
-  // KO 합집합 기준 통합 행 (ko, en, ja)
-  const rows = unifiedKeys(localGlossary).map((ko) => ({
-    ko,
-    en: localGlossary.en?.[ko] ?? "",
-    ja: localGlossary.ja?.[ko] ?? "",
-  }));
-
   function handleAddEntry() {
-    const ko = newKo.trim();
-    const en = newEn.trim();
-    const ja = newJa.trim();
-    if (!ko || (!en && !ja)) return; // KO 필수 + 최소 한 개 대상언어
+    const ko = newEntry.ko.trim();
+    if (!ko || TARGET_LANGS.every((lang) => !newEntry[lang].trim())) return; // KO 필수 + 최소 한 개 대상언어
     setLocalGlossary((prev) => {
-      const next = { ...prev, en: { ...prev.en }, ja: { ...prev.ja } };
-      if (en) next.en[ko] = en;
-      else delete next.en[ko];
-      if (ja) next.ja[ko] = ja;
-      else delete next.ja[ko];
+      const next = { ...prev };
+      for (const lang of TARGET_LANGS) {
+        next[lang] = { ...prev[lang] };
+        const v = newEntry[lang].trim();
+        if (v) next[lang][ko] = v;
+        else delete next[lang][ko];
+      }
       return next;
     });
-    setNewKo("");
-    setNewEn("");
-    setNewJa("");
+    setNewEntry(EMPTY_ENTRY);
   }
 
   function handleDeleteEntry(ko: string) {
     setLocalGlossary((prev) => {
-      const next = { ...prev, en: { ...prev.en }, ja: { ...prev.ja } };
-      delete next.en[ko];
-      delete next.ja[ko];
+      const next = { ...prev };
+      for (const lang of TARGET_LANGS) {
+        next[lang] = { ...prev[lang] };
+        delete next[lang][ko];
+      }
       return next;
     });
   }
 
-  // 인라인 편집 — 대상언어(en/ja) 셀 값 변경. 빈 값이면 해당 언어 키 제거.
-  function handleEditTarget(ko: string, lang: "en" | "ja", value: string) {
+  // 인라인 편집 — 대상언어 셀 값 변경. 빈 값이면 해당 언어 키 제거.
+  function handleEditTarget(ko: string, lang: TargetLang, value: string) {
     setLocalGlossary((prev) => {
       const langMap = { ...(prev[lang] ?? {}) };
       if (value.trim()) langMap[ko] = value;
@@ -122,13 +133,13 @@ export default function SettingsModal() {
     try {
       const { parseGlossaryFile } = await import("../utils/glossaryFile");
       const { glossary, stats } = await parseGlossaryFile(file);
-      const warnings = [];
-      if (stats.jaCount === 0)
-        warnings.push("⚠ JA 0개 — 기존 JA 단어집이 모두 사라집니다.");
-      if (stats.enCount === 0)
-        warnings.push("⚠ EN 0개 — 기존 EN 단어집이 모두 사라집니다.");
+      const warnings = TARGET_LANGS.filter((lang) => stats.counts[lang] === 0).map(
+        (lang) =>
+          `⚠ ${TARGET_LANG_LABELS[lang]} 0개 — 기존 ${TARGET_LANG_LABELS[lang]} 단어집이 모두 사라집니다.`,
+      );
       const summary =
-        `불러오기: JA ${stats.jaCount}개 · EN ${stats.enCount}개` +
+        "불러오기: " +
+        TARGET_LANGS.map((lang) => `${TARGET_LANG_LABELS[lang]} ${stats.counts[lang]}개`).join(" · ") +
         (stats.skippedRows ? ` · 한국어 빈 행 ${stats.skippedRows}개 건너뜀` : "");
       const ok = window.confirm(
         `${summary}\n\n현재 단어집을 이 내용으로 전체 교체합니다. 계속할까요?` +
@@ -184,7 +195,7 @@ export default function SettingsModal() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-modal-title"
-        className="w-full max-w-2xl mx-4 bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[85vh] animate-fade-slide-up"
+        className="w-full max-w-4xl mx-4 bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[85vh] animate-fade-slide-up"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-8 pt-7 pb-2">
@@ -353,7 +364,7 @@ export default function SettingsModal() {
                   <span className="material-symbols-outlined text-base" aria-hidden="true">
                     upload_file
                   </span>
-                  \uD30C\uC77C \uC5C5\uB85C\uB4DC (.xlsx/.csv)
+                  {"\uD30C\uC77C \uC5C5\uB85C\uB4DC (.xlsx/.csv)"}
                 </button>
                 <button
                   type="button"
@@ -363,10 +374,10 @@ export default function SettingsModal() {
                   <span className="material-symbols-outlined text-base" aria-hidden="true">
                     download
                   </span>
-                  \uB0B4\uBCF4\uB0B4\uAE30 / \uD15C\uD50C\uB9BF
+                  {"\uB0B4\uBCF4\uB0B4\uAE30 / \uD15C\uD50C\uB9BF"}
                 </button>
                 <span className="text-xs text-text-muted ml-auto">
-                  ko / en / jp 3\uC5F4 \u00B7 \uBE48 \uCE78\uC740 \uBB34\uC2DC \u00B7 \uC5C5\uB85C\uB4DC \uC2DC \uC804\uCCB4 \uAD50\uCCB4
+                  {"ko / en / jp / cn / tw 5\uC5F4 \u00B7 \uBE48 \uCE78\uC740 \uBB34\uC2DC \u00B7 \uC5C5\uB85C\uB4DC \uC2DC \uC804\uCCB4 \uAD50\uCCB4"}
                 </span>
               </div>
 
@@ -389,49 +400,30 @@ export default function SettingsModal() {
 
               {/* Add new entry \u2014 KO / EN / JA */}
               <div className="flex gap-2 items-end">
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-text-muted mb-1.5">
-                    Source (KO)
-                  </label>
-                  <input
-                    type="text"
-                    value={newKo}
-                    onChange={(e) => setNewKo(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddEntry()}
-                    placeholder="e.g., \uC804\uC124"
-                    className="w-full rounded-lg border border-slate-200 bg-white py-2.5 px-3 text-sm text-text-main placeholder:text-slate-400 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-text-muted mb-1.5">
-                    EN
-                  </label>
-                  <input
-                    type="text"
-                    value={newEn}
-                    onChange={(e) => setNewEn(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddEntry()}
-                    placeholder="e.g., Legend"
-                    className="w-full rounded-lg border border-slate-200 bg-white py-2.5 px-3 text-sm text-text-main placeholder:text-slate-400 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-text-muted mb-1.5">
-                    JA
-                  </label>
-                  <input
-                    type="text"
-                    value={newJa}
-                    onChange={(e) => setNewJa(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddEntry()}
-                    placeholder="e.g., \u4F1D\u8AAC"
-                    className="w-full rounded-lg border border-slate-200 bg-white py-2.5 px-3 text-sm text-text-main placeholder:text-slate-400 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-                  />
-                </div>
+                {ADD_FIELDS.map((f) => (
+                  <div key={f.key} className="flex-1">
+                    <label className="block text-xs font-medium text-text-muted mb-1.5">
+                      {f.label}
+                    </label>
+                    <input
+                      type="text"
+                      value={newEntry[f.key]}
+                      onChange={(e) =>
+                        setNewEntry((prev) => ({ ...prev, [f.key]: e.target.value }))
+                      }
+                      onKeyDown={(e) => e.key === "Enter" && handleAddEntry()}
+                      placeholder={f.placeholder}
+                      className="w-full rounded-lg border border-slate-200 bg-white py-2.5 px-3 text-sm text-text-main placeholder:text-slate-400 focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
+                    />
+                  </div>
+                ))}
                 <button
                   type="button"
                   onClick={handleAddEntry}
-                  disabled={!newKo.trim() || (!newEn.trim() && !newJa.trim())}
+                  disabled={
+                    !newEntry.ko.trim() ||
+                    TARGET_LANGS.every((lang) => !newEntry[lang].trim())
+                  }
                   className="shrink-0 p-2.5 rounded-lg bg-primary text-white hover:bg-primary-dark disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   <span className="material-symbols-outlined text-lg" aria-hidden="true">add</span>
@@ -444,15 +436,14 @@ export default function SettingsModal() {
                   <table className="w-full text-sm table-fixed">
                     <thead>
                       <tr className="bg-slate-50 border-b border-slate-200">
-                        <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider w-1/3">
+                        <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider w-1/4">
                           Source (KO)
                         </th>
-                        <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider">
-                          EN
-                        </th>
-                        <th scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider">
-                          JA
-                        </th>
+                        {TARGET_LANGS.map((lang) => (
+                          <th key={lang} scope="col" className="text-left py-2.5 px-4 font-semibold text-text-muted text-xs uppercase tracking-wider">
+                            {TARGET_LANG_LABELS[lang]}
+                          </th>
+                        ))}
                         <th scope="col" className="w-12" />
                       </tr>
                     </thead>
@@ -465,28 +456,19 @@ export default function SettingsModal() {
                           <td className="py-1.5 px-4 text-text-main font-medium break-words">
                             {row.ko}
                           </td>
-                          <td className="py-1.5 px-2">
-                            <input
-                              type="text"
-                              value={row.en}
-                              onChange={(e) =>
-                                handleEditTarget(row.ko, "en", e.target.value)
-                              }
-                              placeholder="\u2014"
-                              className="w-full rounded-md border border-transparent bg-transparent py-1.5 px-2 text-sm text-text-main hover:border-slate-200 focus:bg-white focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                            />
-                          </td>
-                          <td className="py-1.5 px-2">
-                            <input
-                              type="text"
-                              value={row.ja}
-                              onChange={(e) =>
-                                handleEditTarget(row.ko, "ja", e.target.value)
-                              }
-                              placeholder="\u2014"
-                              className="w-full rounded-md border border-transparent bg-transparent py-1.5 px-2 text-sm text-text-main hover:border-slate-200 focus:bg-white focus:border-primary focus:ring-1 focus:ring-primary transition-all"
-                            />
-                          </td>
+                          {TARGET_LANGS.map((lang) => (
+                            <td key={lang} className="py-1.5 px-2">
+                              <input
+                                type="text"
+                                value={row[lang]}
+                                onChange={(e) =>
+                                  handleEditTarget(row.ko, lang, e.target.value)
+                                }
+                                placeholder={"\u2014"}
+                                className="w-full rounded-md border border-transparent bg-transparent py-1.5 px-2 text-sm text-text-main hover:border-slate-200 focus:bg-white focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                              />
+                            </td>
+                          ))}
                           <td className="py-1.5 px-2 text-center">
                             <button
                               type="button"
@@ -508,9 +490,9 @@ export default function SettingsModal() {
                   <span className="material-symbols-outlined text-3xl text-slate-300 mb-2 block" aria-hidden="true">
                     book_2
                   </span>
-                  \uB2E8\uC5B4\uC9D1\uC774 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.
+                  {"\uB2E8\uC5B4\uC9D1\uC774 \uBE44\uC5B4 \uC788\uC2B5\uB2C8\uB2E4."}
                   <br />
-                  \uD30C\uC77C\uC744 \uC5C5\uB85C\uB4DC\uD558\uAC70\uB098 \uC704\uC5D0\uC11C \uC9C1\uC811 \uCD94\uAC00\uD558\uC138\uC694.
+                  {"\uD30C\uC77C\uC744 \uC5C5\uB85C\uB4DC\uD558\uAC70\uB098 \uC704\uC5D0\uC11C \uC9C1\uC811 \uCD94\uAC00\uD558\uC138\uC694."}
                 </div>
               )}
             </div>

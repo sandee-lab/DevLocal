@@ -127,6 +127,19 @@ def api_start(req: StartRequest):
                 f"시트 '{req.sheet_name}'에 필수 컬럼이 없습니다: {', '.join(missing)}"
             )
 
+        # 타겟 언어 결정 — 요청 언어(비어 있으면 전체 지원 언어) 중 시트에 컬럼이 있는 언어만
+        requested_langs = req.target_languages or list(SUPPORTED_LANGUAGES)
+        target_languages = [
+            lang for lang in requested_langs
+            if SUPPORTED_LANGUAGES.get(lang) in df.columns
+        ]
+        if not target_languages:
+            raise ValueError(
+                f"시트 '{req.sheet_name}'에 번역 대상 언어 컬럼이 없습니다. "
+                f"지원 컬럼: {', '.join(SUPPORTED_LANGUAGES.values())}"
+            )
+        logger.info("Target languages for '%s': %s", req.sheet_name, target_languages)
+
         df = ensure_tool_status_column(ws, df)
 
         if req.row_start > 0 and req.row_end > 0:
@@ -160,7 +173,7 @@ def api_start(req: StartRequest):
         session.initial_state = {
             "sheet_name": req.sheet_name,
             "mode": req.mode,
-            "target_languages": req.target_languages,
+            "target_languages": target_languages,
             "original_data": records,
             "backup_data": df.to_dict("records"),
             "ko_review_results": [],
