@@ -87,7 +87,13 @@ def get_worksheet_names(spreadsheet: gspread.Spreadsheet) -> list[str]:
 
 def load_sheet_data(worksheet: gspread.Worksheet) -> pd.DataFrame:
     """시트 전체를 1회 벌크 로드 → DataFrame 변환."""
-    records = _retry_with_backoff(worksheet.get_all_records)
+    # numericise_ignore=["all"]: 숫자형 셀의 int/float 자동 변환 비활성화.
+    # 숫자 Key(예: Etc 시트의 1001, 1002…)가 int가 되면 LLM 응답의 str key와
+    # 매칭에 실패해 전건 "응답 누락 → 검수실패"가 됨. 또한 코드 전반이 셀을
+    # 문자열로 가정(.replace()/.strip())하므로 숫자 본문은 AttributeError 유발.
+    records = _retry_with_backoff(
+        worksheet.get_all_records, numericise_ignore=["all"]
+    )
     df = pd.DataFrame(records)
     # 빈 문자열 → NaN 변환하지 않음 (원본 보존)
     return df

@@ -11,6 +11,12 @@ from config.constants import LLM_MODEL
 logger = logging.getLogger("devlocal.llm")
 
 
+def _norm_key(value) -> str:
+    """매칭용 key 정규화 — LLM은 같은 key를 int/str 어느 쪽으로도 돌려줄 수 있으므로
+    요청/응답 양쪽을 문자열로 통일해 타입 불일치로 인한 매칭 실패를 방지."""
+    return "" if value is None else str(value)
+
+
 def split_warmup_tasks(tasks: list, prompt_key: Callable) -> tuple[list, list]:
     """
     청크 작업 목록을 (warmup, rest)로 분리.
@@ -223,14 +229,14 @@ def llm_chunk_with_completeness(
         # key + 청크 내 순서 기준으로 요청-응답 매칭
         pending_by_key: dict[str, list[dict]] = {}
         for it in pending:
-            pending_by_key.setdefault(item_key_fn(it), []).append(it)
+            pending_by_key.setdefault(_norm_key(item_key_fn(it)), []).append(it)
         consumed: dict[str, int] = {}
         matched_ids: set[int] = set()
 
         for resp in response_items:
             if not isinstance(resp, dict):
                 continue
-            rk = response_key_fn(resp)
+            rk = _norm_key(response_key_fn(resp))
             bucket = pending_by_key.get(rk)
             if not bucket:
                 continue
