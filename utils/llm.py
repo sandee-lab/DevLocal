@@ -17,6 +17,29 @@ def _norm_key(value) -> str:
     return "" if value is None else str(value)
 
 
+class LLMCallError(Exception):
+    """LLM 호출이 (JSON 파싱이 아니라) API/네트워크 레벨에서 실패했음을 나타냄.
+
+    크레딧 소진·인증 오류·rate limit·timeout 등 호출 자체가 거부된 경우.
+    호출부가 잡아서 실제 사유를 로그/실패사유로 표면화하도록 friendly 메시지를 담는다.
+    """
+
+
+def _friendly_llm_error(err: Exception) -> str:
+    """litellm/xAI 예외를 사람이 읽을 수 있는 한국어 사유로 변환 — 원인 진단을 UI에 노출."""
+    msg = str(err)
+    low = msg.lower()
+    if "permission-denied" in low or "credits" in low or "spending limit" in low:
+        return "xAI 크레딧 소진 또는 지출 한도 초과 — console.x.ai에서 충전/한도 상향 필요"
+    if "invalid api key" in low or "authentication" in low or "unauthorized" in low or " 401" in low:
+        return "xAI 인증 실패 — XAI_API_KEY 확인 필요"
+    if "rate limit" in low or "429" in low or "too many requests" in low:
+        return "xAI rate limit 도달 — 잠시 후 재시도"
+    if "timeout" in low or "timed out" in low:
+        return "xAI 응답 시간 초과(timeout)"
+    return f"LLM 호출 실패: {msg}"
+
+
 def split_warmup_tasks(tasks: list, prompt_key: Callable) -> tuple[list, list]:
     """
     청크 작업 목록을 (warmup, rest)로 분리.
@@ -203,6 +226,7 @@ def llm_chunk_with_completeness(
     pending = list(items)
     pairs: list[tuple[dict, dict]] = []
     total_usage = {"input": 0, "output": 0, "reasoning": 0, "cached": 0}
+    last_error: Exception | None = None
 
     for attempt in range(max_retries + 1):
         if not pending:
@@ -218,6 +242,7 @@ def llm_chunk_with_completeness(
                 conv_id=conv_id,
             )
         except Exception as e:
+            last_error = e
             logger.error(
                 "LLM 호출 실패 (completeness 시도 %d/%d, 잔여 %d개): %s",
                 attempt + 1, max_retries + 1, len(pending), e,
@@ -262,5 +287,11 @@ def llm_chunk_with_completeness(
             )
 
         pending = new_pending
+
+    # 전건 실패(획득 pair 0개) + 호출 자체가 예외로 거부된 경우 → 실제 사유로 재발생.
+    # 호출부 except가 이 메시지를 로그/실패사유에 표면화한다(크레딧 소진 등 침묵 방지).
+    # 부분 성공이거나 단순 누락(예외 없음)은 기존 동작 그대로 (pairs, missing) 반환.
+    if not pairs and pending and last_error is not None:
+        raise LLMCallError(_friendly_llm_error(last_error)) from last_error
 
     return pairs, pending, total_usage
