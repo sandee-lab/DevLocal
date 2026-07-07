@@ -46,7 +46,9 @@ def _build_retry_prompt(items: list[dict], lang: str) -> str:
         part += (
             "\n위 오류를 수정하여 다시 번역하세요. "
             "특히 원문의 포맷팅 태그({변수}, <color>, \\n 등)를 "
-            "번역 결과에 동일하게 보존해야 합니다."
+            "번역 결과에 동일하게 보존해야 하며, "
+            "번역 결과에 한국어(한글)가 1글자라도 남으면 안 됩니다 "
+            "(관용구·말장난도 반드시 타겟 언어로 의역)."
         )
         parts.append(part)
     return "\n\n---\n\n".join(parts)

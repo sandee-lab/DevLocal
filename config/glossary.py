@@ -12,6 +12,7 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent / ".app_config.json"
 
 _DEFAULT_GLOSSARY: dict[str, dict[str, str]] = {
     "ja": {
+        "카마존": "ニャマゾン",
         "일반": "一般",
         "고급": "高級",
         "희귀": "レア",

@@ -50,9 +50,9 @@ pip install -r backend/requirements.txt         # 백엔드 의존성
 
 ## LLM 설정
 - **모델**: `xai/grok-4.3` — **CHUNK_SIZE**: 50행 — **timeout**: 120초
-- **가격** (2026-05 xAI 공식 / OpenRouter 확인): input **$1.25/1M**, output **$2.50/1M**, cached_input **$0.125/1M** (input의 10%)
+- **가격** (2026-07 xAI 공식 docs.x.ai 확인): input **$1.25/1M**, output **$2.50/1M**, cached_input **$0.20/1M**
 - **주의**: xAI/Grok은 `completion_tokens`와 `reasoning_tokens`를 별도 리포트 → **합산 필요** (OpenAI 표준과 다름)
-- **주의**: cached_input은 xAI 공식 명시 없어 "10% of cache-miss rate" 인용값. 실제 청구액과 cost summary 차이 시 이 값부터 점검
+- 번역 결과의 한글 잔존은 `check_hangul_residue()`(utils/validation.py)로 정규식 검증 → 태그 검증과 동일한 재번역 루프 합류 (번역문 == 원문이면 의도적 통과로 예외)
 
 ## Secrets / 설정
 - `.env` — `XAI_API_KEY`, `GCP_SERVICE_ACCOUNT_JSON_PATH` → `backend/config.py`로 접근

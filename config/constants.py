@@ -67,10 +67,9 @@ MAX_RETRY_COUNT = 3
 
 # LLM 모델 설정
 LLM_MODEL = "xai/grok-4.3"
-# 단가 출처: xAI 공식 모델 페이지 / OpenRouter (2026-05 확인)
-# input/output은 공식, cached_input은 xAI 일반 정책 "10% of cache-miss rate" 인용
+# 단가 출처: xAI 공식 모델 페이지 docs.x.ai/developers/models/grok-4.3 (2026-07 확인)
 LLM_PRICING = {
     "input": 1.25 / 1_000_000,        # $/token
     "output": 2.50 / 1_000_000,       # $/token  (reasoning_tokens 포함 합산)
-    "cached_input": 0.125 / 1_000_000,
+    "cached_input": 0.20 / 1_000_000,  # 공식 문서 명시값
 }

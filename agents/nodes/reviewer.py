@@ -20,6 +20,7 @@ from config.glossary import format_glossary_text
 from utils.validation import (
     apply_glossary_postprocess,
     check_glossary_compliance,
+    check_hangul_residue,
     validate_tags,
 )
 
@@ -122,8 +123,10 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
         translated = apply_glossary_postprocess(translated, lang)
 
         tag_result = validate_tags(source_ko, translated)
+        hangul_result = check_hangul_residue(source_ko, translated)
+        regex_errors = tag_result["errors"] + hangul_result["errors"]
 
-        if not tag_result["valid"]:
+        if regex_errors:
             count_key = f"{key}_{lang}"
             current = retry_count.get(count_key, 0)
 
@@ -136,11 +139,11 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
                     "source_ko": source_ko,
                     "shared_comments": shared_comments,
                     "translated": translated,
-                    "feedback": tag_result["errors"],
+                    "feedback": regex_errors,
                     "row_index": row_index,
                 })
                 logs.append(
-                    f"[Node 4] 태그 검증 실패 → 재번역 요청 "
+                    f"[Node 4] 태그/한글잔존 검증 실패 → 재번역 요청 "
                     f"({current + 1}/{MAX_RETRY_COUNT}) — {key} ({lang})"
                 )
                 continue
@@ -148,11 +151,11 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
                 failed_rows.append({
                     "key": key,
                     "lang": lang,
-                    "reason": f"태그 검증 {MAX_RETRY_COUNT}회 실패: {'; '.join(tag_result['errors'])}",
+                    "reason": f"태그/한글잔존 검증 {MAX_RETRY_COUNT}회 실패: {'; '.join(regex_errors)}",
                     "row_index": row_index,
                 })
                 logs.append(
-                    f"[Node 4] 태그 검증 {MAX_RETRY_COUNT}회 초과 → 검수실패 — {key} ({lang})"
+                    f"[Node 4] 태그/한글잔존 검증 {MAX_RETRY_COUNT}회 초과 → 검수실패 — {key} ({lang})"
                 )
                 continue
 

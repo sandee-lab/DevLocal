@@ -48,11 +48,20 @@ def build_translator_prompt(
 3. 게임 세계관과 톤앤매너를 반영하여 자연스럽게 번역하세요.
 4. Shared Comments가 제공되면 해당 컨텍스트를 참고하여 번역하세요.
 5. 시트 전체에서 동일한 용어에 대해 일관된 번역을 유지하세요.
+6. **번역 결과에 한국어(한글)가 1글자라도 남으면 절대 안 됩니다.**
+   관용구, 말장난, 의성어/의태어도 건너뛰지 말고 반드시 타겟 언어로 의역하세요.
+   (NEVER leave any Korean characters in the output. Idioms and wordplay must be
+   fully rendered in the target language.)
 
 ## 태그 보존 예시
 원문: "모험가님, 환영합니다!\\n새로운 여정을 시작하세요."
 번역: "Welcome, adventurer!\\nStart your new journey."
 (\\n이 그대로 유지됨)
+
+## 한글 잔존 금지 예시 (관용구도 반드시 의역)
+원문: "행성을 탈탈 털어먹기 위해서죠. 각설하고, 다시 시작하세요!"
+잘못된 번역 (일본어): "惑星を脱탈 털어먹기 위해서죠。各설하고、再開してください！" ← 한글 잔존, 절대 금지
+올바른 번역 (일본어): "惑星を根こそぎしゃぶり尽くすためですよ。さてさて、再開してください！"
 
 ## 출력 형식
 JSON 배열로 반환하세요:

@@ -31,6 +31,34 @@ def validate_tags(source_ko: str, translated: str) -> dict:
     return {"valid": len(errors) == 0, "errors": errors}
 
 
+_HANGUL_RUN = re.compile(r"[가-힣]+(?:[\s·,]*[가-힣]+)*")
+
+
+def check_hangul_residue(source_ko: str, translated: str) -> dict:
+    """
+    번역문에 한글이 잔존하는지 검증 (Glossary 후처리 이후 호출 전제).
+
+    예외: 번역문이 원문과 완전히 동일하면 의도적 통과로 간주
+    (예: 언어 선택 UI의 Local_Lang_KO = "한국어").
+
+    Returns: {"valid": bool, "errors": [str]}
+    """
+    if translated == source_ko:
+        return {"valid": True, "errors": []}
+
+    runs = _HANGUL_RUN.findall(translated)
+    if not runs:
+        return {"valid": True, "errors": []}
+
+    snippets = ", ".join(f"'{r}'" for r in runs[:5])
+    if len(runs) > 5:
+        snippets += f" 외 {len(runs) - 5}건"
+    return {
+        "valid": False,
+        "errors": [f"번역문에 한국어 잔존: {snippets} — 관용구 포함 전체를 타겟 언어로 번역해야 함"],
+    }
+
+
 def apply_glossary_postprocess(text: str, lang: str) -> str:
     """
     Glossary 강제 치환 — 번역 결과에서 오역된 Glossary 용어를 교정.
