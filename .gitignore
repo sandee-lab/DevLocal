@@ -8,3 +8,4 @@ __pycache__/
 .app_config.json
 .claude/*
 !.claude/docs/
+.serena/
