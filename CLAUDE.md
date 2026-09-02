@@ -3,14 +3,14 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 프로젝트 개요
-구글 스프레드시트 기반 게임 텍스트(한국어)를 AI(Grok 4.3)로 다국어(EN, JA, ZH-CN, ZH-TW) 자동 번역/검수하는 웹앱.
+구글 스프레드시트 기반 게임 텍스트(한국어)를 AI(Grok 4.6)로 다국어(EN, JA, ZH-CN, ZH-TW) 자동 번역/검수하는 웹앱.
 
 ## 기술 스택
 - **Frontend**: React 19 + Vite + TypeScript + Tailwind CSS v4 + Zustand (SPA)
 - **Backend**: FastAPI + SSE (sse-starlette) + uvicorn
 - **Agent Orchestration**: LangGraph 0.6 (8 Node + HITL 2곳 interrupt)
 - **Google Sheets**: gspread (Batch Read/Write + Exponential Backoff)
-- **LLM**: LiteLLM → xai/grok-4.3 (timeout=120s)
+- **LLM**: LiteLLM → xai/grok-4.6 (reasoning_effort=low, timeout=120s)
 - **Data**: Pandas
 - **Legacy**: Streamlit (app.py — 기존 버전, 별도 실행 가능)
 
@@ -49,8 +49,10 @@ pip install -r backend/requirements.txt         # 백엔드 의존성
 - 먼저 해당 단계의 점검 체크리스트를 작성하고, 점검을 통과한 뒤 구현에 들어간다
 
 ## LLM 설정
-- **모델**: `xai/grok-4.3` — **CHUNK_SIZE**: 50행 — **timeout**: 120초
-- **가격** (2026-07 xAI 공식 docs.x.ai 확인): input **$1.25/1M**, output **$2.50/1M**, cached_input **$0.20/1M**
+- **모델**: `xai/grok-4.6` — **CHUNK_SIZE**: 50행 — **timeout**: 120초
+- **`reasoning_effort`는 반드시 `low`** (`LLM_REASONING_EFFORT`) — 4.6 기본값 high로 두면 장문 청크에서 reasoning 토큰이 4000~7000개로 폭증해 **timeout 실패 + 비용 3배**. low에서 reasoning 20~80개로 정상화
+- **가격** (2026-09 xAI 공식 docs.x.ai 확인): input **$2.00/1M**, output **$6.00/1M**, cached_input **$0.50/1M**
+- 모델 비교는 `scripts/compare_models.py` (실제 시트·실제 프롬프트로 결함률/비용/속도 측정, `모델@effort` 문법 지원)
 - **주의**: xAI/Grok은 `completion_tokens`와 `reasoning_tokens`를 별도 리포트 → **합산 필요** (OpenAI 표준과 다름)
 - 번역 결과의 한글 잔존은 `check_hangul_residue()`(utils/validation.py)로 정규식 검증 → 태그 검증과 동일한 재번역 루프 합류 (번역문 == 원문이면 의도적 통과로 예외)
 

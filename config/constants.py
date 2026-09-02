@@ -54,8 +54,9 @@ LANGUAGE_PROMPT_LABELS = {
 }
 
 # LLM 번역 청크 크기 (행 수)
-# 50: grok-4.3 + completeness/split 재시도 헬퍼 적용 후 검증된 값
+# 50: completeness/split 재시도 헬퍼 적용 후 검증된 값
 # (25 대비 처리량 +50%, 단가 -16%, 누락률 0% 유지 — 2026-05 측정)
+# grok-4.6@low 전환 후에도 유효 — Mail/Unit/Dialogue 1350행에서 분할 재시도 0회 (2026-09 측정)
 CHUNK_SIZE = 50
 
 # 한 단계(ko_review/translator/reviewer) 내에서 동시에 실행하는 LLM chunk 수
@@ -66,10 +67,19 @@ LLM_CHUNK_PARALLELISM = 4
 MAX_RETRY_COUNT = 3
 
 # LLM 모델 설정
-LLM_MODEL = "xai/grok-4.3"
-# 단가 출처: xAI 공식 모델 페이지 docs.x.ai/developers/models/grok-4.3 (2026-07 확인)
+LLM_MODEL = "xai/grok-4.6"
+
+# reasoning_effort — grok-4.6의 기본값은 high로, 장문 청크에서 reasoning 토큰이
+# 4000~7000개까지 치솟아 timeout(120s)을 넘기고 비용이 3배 이상 뛴다.
+# low로 고정하면 reasoning이 20~80개로 떨어져 속도·비용이 grok-4.3 수준으로 회복된다.
+# (Mail 25행 JA: high는 180s 타임아웃 실패 / low는 40s 정상 — 2026-09 측정)
+# None으로 두면 파라미터를 보내지 않아 모델 기본값을 따른다.
+LLM_REASONING_EFFORT = "low"
+
+# 단가 출처: xAI 공식 모델 페이지 docs.x.ai/developers/models (2026-09 확인)
+# 주의: 프롬프트 200k 토큰 초과 시 2배 티어가 적용되나, 청크 호출(CHUNK_SIZE=50)은 해당 없음
 LLM_PRICING = {
-    "input": 1.25 / 1_000_000,        # $/token
-    "output": 2.50 / 1_000_000,       # $/token  (reasoning_tokens 포함 합산)
-    "cached_input": 0.20 / 1_000_000,  # 공식 문서 명시값
+    "input": 2.00 / 1_000_000,        # $/token
+    "output": 6.00 / 1_000_000,       # $/token  (reasoning_tokens 포함 합산)
+    "cached_input": 0.50 / 1_000_000,  # 공식 문서 명시값
 }

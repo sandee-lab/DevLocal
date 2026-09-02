@@ -6,7 +6,7 @@ from typing import Callable
 
 import litellm
 
-from config.constants import LLM_MODEL
+from config.constants import LLM_MODEL, LLM_REASONING_EFFORT
 
 logger = logging.getLogger("devlocal.llm")
 
@@ -119,6 +119,11 @@ def llm_json_call(
     요청은 같은 서버로 라우팅되어 캐시 prefix를 공유 → cached_tokens 증가.
     """
     extra_headers = {"x-grok-conv-id": conv_id} if conv_id else None
+    # reasoning_effort는 값이 있을 때만 전달 — None이면 모델 기본값을 따른다
+    # (grok-4.6은 기본 high라 장문 청크에서 timeout/비용 폭증. constants 주석 참조)
+    effort_kwargs = (
+        {"reasoning_effort": LLM_REASONING_EFFORT} if LLM_REASONING_EFFORT else {}
+    )
     response = litellm.completion(
         model=LLM_MODEL,
         api_key=api_key,
@@ -128,6 +133,7 @@ def llm_json_call(
         ],
         timeout=timeout,
         extra_headers=extra_headers,
+        **effort_kwargs,
     )
     content = _strip_codeblock(response.choices[0].message.content)
     parsed = json.loads(content)
