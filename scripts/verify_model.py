@@ -1,8 +1,8 @@
 """
-xai/grok-4.3 모델 호출 검증 + 효율 측정 스크립트.
+xai/grok-4.6 모델 호출 검증 + 효율 측정 스크립트.
 
 목적:
-  1. config.constants.LLM_MODEL("xai/grok-4.3") 가 실제 xAI API에서 정상 호출되는지 확인
+  1. config.constants.LLM_MODEL("xai/grok-4.6") 가 실제 xAI API에서 정상 호출되는지 확인
   2. 청크 사이즈별(25/50/100행) 응답 누락률·JSON 무결성·소요 시간·토큰 사용량 측정
   3. utils.llm.llm_json_call_with_split (JSON 파싱 실패 시 분할 재시도) 헬퍼 동작 검증
 
@@ -27,8 +27,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.config import get_xai_api_key
-from config.constants import LLM_MODEL, CHUNK_SIZE, LLM_PRICING
+from config.constants import LLM_MODEL, CHUNK_SIZE
 from utils.llm import llm_json_call, llm_json_call_with_split
+from utils.cost import build_cost_summary
+from utils.validation import validate_tags, check_hangul_residue
 
 
 # ── 1) 최소 호출 — 모델 라우팅·인증 확인 ──────────────────────────────
@@ -136,32 +138,28 @@ def chunk_efficiency_test(size: int) -> dict:
     extras = returned_keys - requested_keys
     miss_rate = len(missing) / size
 
-    # 포맷 태그 보존 검사
+    # 포맷 태그 보존 + 한글 잔존 검사 — 프로덕션과 동일한 검증기 사용
+    # (토큰 하드코딩 휴리스틱은 오탐이 많아 폐기: 실제 결함 0건을 4건으로 보고했음)
     tag_violations = 0
     for src in items_in:
-        if "{" in src["ko"] or "%" in src["ko"] or "<" in src["ko"] or "\\n" in src["ko"]:
-            match = next((r for r in result if r.get("key") == src["key"]), None)
-            if match is None:
-                continue
-            translated = str(match.get("translated", ""))
-            for tok in ("{amount}", "{gold}", "{exp}", "{max}", "{time}", "{count}", "{item}",
-                        "<color=#FFD700>", "</color>", "<b>", "</b>", "%d", "\\n"):
-                if tok in src["ko"] and tok not in translated:
-                    tag_violations += 1
+        match = next((r for r in result if r.get("key") == src["key"]), None)
+        if match is None:
+            continue
+        translated = str(match.get("translated", ""))
+        if (not validate_tags(src["ko"], translated)["valid"]
+                or not check_hangul_residue(src["ko"], translated)["valid"]):
+            tag_violations += 1
 
     throughput = size / elapsed if elapsed > 0 else 0
-    # cached_tokens는 prompt_tokens에 이미 포함 → 차감 후 cached 단가 별도 적용
-    non_cached_input = max(usage["input"] - usage["cached"], 0)
-    cost_usd = (
-        non_cached_input * LLM_PRICING["input"]
-        + usage["cached"] * LLM_PRICING["cached_input"]
-        + (usage["output"] + usage["reasoning"]) * LLM_PRICING["output"]
-    )
+    # 비용 계산은 utils.cost가 단일 출처 (cached 차감·reasoning 합산 규칙 포함)
+    cost_usd = build_cost_summary(
+        usage["input"], usage["output"], usage["reasoning"], usage["cached"]
+    )["estimated_cost_usd"]
     print(f"  OK: {elapsed:.2f}s ({throughput:.1f} 행/s)")
     print(f"  반환: {len(result)}건 / 요청: {size}건 (누락 {len(missing)}, 추가 {len(extras)}, 누락률 {miss_rate*100:.1f}%)")
     print(f"  토큰: in={usage['input']} out={usage['output']} reasoning={usage['reasoning']} cached={usage['cached']}")
-    print(f"  태그 손실 의심: {tag_violations}건")
-    print(f"  비용 (이 호출): ${cost_usd:.5f}")
+    print(f"  검증 결함(태그·한글잔존): {tag_violations}건")
+    print(f"  비용 (이 호출): ${cost_usd:.4f}")
 
     return {
         "size": size,
@@ -192,7 +190,7 @@ def split_retry_test() -> bool:
     import utils.llm as llm_mod
     original = llm_mod.llm_json_call
 
-    def fake_call(system_prompt, user_prompt, api_key, timeout=120):
+    def fake_call(system_prompt, user_prompt, api_key, timeout=120, conv_id=None):
         call_log.append(len(user_prompt))
         # 첫 호출(전체) → 파싱 실패 시뮬레이션
         if len(call_log) == 1:
@@ -237,7 +235,7 @@ def completeness_test() -> bool:
 
     # 시나리오 1: 정상 — 1회 호출, 누락 0
     items = [{"key": f"k_{i}"} for i in range(5)]
-    def s1_call(sp, up, ak, timeout=120):
+    def s1_call(sp, up, ak, timeout=120, conv_id=None):
         return ([{"key": f"k_{i}", "translated": f"t_{i}"} for i in range(5)],
                 {"input": 100, "output": 50, "reasoning": 10, "cached": 0})
     llm_mod.llm_json_call = s1_call
@@ -250,7 +248,7 @@ def completeness_test() -> bool:
     # 시나리오 2: 1차 호출에서 2개 누락 → 재요청 시 모두 반환
     items = [{"key": f"k_{i}"} for i in range(5)]
     call_count = [0]
-    def s2_call(sp, up, ak, timeout=120):
+    def s2_call(sp, up, ak, timeout=120, conv_id=None):
         call_count[0] += 1
         if call_count[0] == 1:
             # k_3, k_4 누락
@@ -269,7 +267,7 @@ def completeness_test() -> bool:
 
     # 시나리오 3: 매번 같은 키만 반환 → 진전 없음 감지 후 중단
     items = [{"key": f"k_{i}"} for i in range(3)]
-    def s3_call(sp, up, ak, timeout=120):
+    def s3_call(sp, up, ak, timeout=120, conv_id=None):
         return ([{"key": "k_0", "translated": "t_0"}],
                 {"input": 50, "output": 25, "reasoning": 0, "cached": 0})
     llm_mod.llm_json_call = s3_call
@@ -282,7 +280,7 @@ def completeness_test() -> bool:
 
     # 시나리오 4: 응답에 노이즈(list 아닌 항목 + 엉뚱한 key) 섞여도 정상 매칭
     items = [{"key": f"k_{i}"} for i in range(3)]
-    def s4_call(sp, up, ak, timeout=120):
+    def s4_call(sp, up, ak, timeout=120, conv_id=None):
         return ([
             "not a dict",                              # 무시
             {"key": "unknown", "translated": "junk"},  # 무시 (요청에 없는 key)
@@ -299,7 +297,7 @@ def completeness_test() -> bool:
 
     # 시나리오 5: 중복 key 정합성 — 같은 key 3개 요청, 응답도 3개. 모두 매칭되어야 함.
     items = [{"key": "dup", "row": i} for i in range(3)]
-    def s5_call(sp, up, ak, timeout=120):
+    def s5_call(sp, up, ak, timeout=120, conv_id=None):
         return ([
             {"key": "dup", "translated": "a"},
             {"key": "dup", "translated": "b"},
@@ -351,7 +349,7 @@ if __name__ == "__main__":
                 f"({r['throughput']:5.1f}행/s), "
                 f"누락 {r['missing']}/{r['size']} ({r['miss_rate']*100:4.1f}%), "
                 f"태그손실 {r['tag_violations']}, "
-                f"비용 ${r['cost_usd']:.5f}"
+                f"비용 ${r['cost_usd']:.4f}"
             )
         else:
             print(f"  size={r['size']}: FAIL ({r.get('error')})")

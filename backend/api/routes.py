@@ -26,12 +26,12 @@ from backend.api.schemas import (
 )
 from backend.api.session_manager import session_manager
 from config.constants import (
-    LLM_PRICING,
     REQUIRED_COLUMNS,
     SUPPORTED_LANGUAGES,
     Status,
     TOOL_STATUS_COLUMN,
 )
+from utils.cost import build_cost_summary
 from utils.diff_report import generate_ko_diff_report, generate_translation_diff_report
 from utils.sheets import (
     batch_format_cells,
@@ -51,23 +51,6 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 # ── 로컬 설정 파일 ──────────────────────────────────────────────────
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / ".app_config.json"
-
-
-def _build_cost_summary(input_t: int, output_t: int, reasoning_t: int, cached_t: int) -> dict:
-    """토큰 사용량으로 cost summary 생성 — SSE/REST 양쪽 단일 진실 출처."""
-    non_cached_input = max(input_t - cached_t, 0)
-    cost = (
-        non_cached_input * LLM_PRICING["input"]
-        + cached_t * LLM_PRICING["cached_input"]
-        + (output_t + reasoning_t) * LLM_PRICING["output"]
-    )
-    return {
-        "input_tokens": input_t,
-        "output_tokens": output_t,
-        "reasoning_tokens": reasoning_t,
-        "cached_tokens": cached_t,
-        "estimated_cost_usd": round(cost, 4),
-    }
 
 
 def _load_config() -> dict:
@@ -469,7 +452,7 @@ def _run_translation_phase(session, resume_value: str):
             session.translation_report_csv = report_csv
             report_data = report_df.to_dict("records")
 
-        cost_summary = _build_cost_summary(
+        cost_summary = build_cost_summary(
             result.get("total_input_tokens", 0),
             result.get("total_output_tokens", 0),
             result.get("total_reasoning_tokens", 0),
@@ -675,7 +658,7 @@ def api_state(session_id: str):
         review_count = len(session.graph_result.get("review_results", []))
         fail_count = len(session.graph_result.get("failed_rows", []))
         total_rows = len(session.graph_result.get("original_data", []))
-        cost_summary = _build_cost_summary(
+        cost_summary = build_cost_summary(
             session.graph_result.get("total_input_tokens", 0),
             session.graph_result.get("total_output_tokens", 0),
             session.graph_result.get("total_reasoning_tokens", 0),

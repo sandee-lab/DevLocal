@@ -36,12 +36,12 @@ def _save_config(data: dict):
 
 from agents.graph import build_graph
 from config.constants import (
-    LLM_PRICING,
     REQUIRED_COLUMNS,
     SUPPORTED_LANGUAGES,
     Status,
     TOOL_STATUS_COLUMN,
 )
+from utils.cost import build_cost_summary
 from utils.sheets import (
     batch_format_cells,
     batch_update_sheet,
@@ -217,10 +217,13 @@ def _process_translation_result(result: dict):
         st.session_state.translation_report_df = report_df
         st.session_state.translation_report_csv = report_csv
 
-    st.session_state.cost_summary = {
-        "input_tokens": result.get("total_input_tokens", 0),
-        "output_tokens": result.get("total_output_tokens", 0),
-    }
+    # reasoning/cached 토큰까지 포함해야 실제 과금과 맞음 (utils/cost.py 주석 참조)
+    st.session_state.cost_summary = build_cost_summary(
+        result.get("total_input_tokens", 0),
+        result.get("total_output_tokens", 0),
+        result.get("total_reasoning_tokens", 0),
+        result.get("total_cached_tokens", 0),
+    )
 
 
 # ── 공통 상태 플래그 ──────────────────────────────────────────────────
@@ -923,7 +926,9 @@ if st.session_state.current_step == "done":
         summary = st.session_state.cost_summary
         input_t = summary.get("input_tokens", 0)
         output_t = summary.get("output_tokens", 0)
-        cost = (input_t * LLM_PRICING["input"]) + (output_t * LLM_PRICING["output"])
+        reasoning_t = summary.get("reasoning_tokens", 0)
+        cached_t = summary.get("cached_tokens", 0)
+        cost = summary.get("estimated_cost_usd", 0)
 
         review_count = 0
         if (
@@ -941,7 +946,9 @@ if st.session_state.current_step == "done":
             {"label": "실패", "value": str(fail_count),
              "type": "error" if fail_count else "success"},
             {"label": "Input 토큰", "value": f"{input_t:,}", "type": ""},
-            {"label": "Output 토큰", "value": f"{output_t:,}", "type": ""},
+            # xAI는 reasoning_tokens를 별도 리포트하지만 output 단가로 과금 → 합산 표시
+            {"label": "Output 토큰", "value": f"{output_t + reasoning_t:,}", "type": ""},
+            {"label": "캐시 적중", "value": f"{cached_t:,}", "type": ""},
             {"label": "예상 비용", "value": f"${cost:.4f}", "type": "warning"},
         ])
 
