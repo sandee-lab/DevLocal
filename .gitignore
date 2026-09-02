@@ -9,3 +9,4 @@ __pycache__/
 .claude/*
 !.claude/docs/
 .serena/
+scripts/_compare_*.json
