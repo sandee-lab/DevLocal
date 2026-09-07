@@ -3,6 +3,8 @@ langgraph>=0.2.0
 langchain-core>=0.3.0
 gspread>=6.0.0
 google-auth>=2.29.0
-litellm>=1.40.0
+# 버전 제약 근거는 backend/requirements.txt 주석 참조
+litellm>=1.100.0; python_version >= "3.11"
+litellm>=1.96.2,<1.97; python_version < "3.11"
 pandas>=2.2.0
 nest_asyncio>=1.6.0

@@ -6,7 +6,13 @@ pydantic>=2.0.0
 # Agent / LLM
 langgraph>=0.6.0
 langchain-core>=0.3.0
-litellm>=1.0.0
+# litellm 하한을 1.100.0으로 고정 — 이 버전부터 번들 모델맵에 xai/grok-4.6이
+# 포함된다. 그 이전 버전은 모델맵 원격 조회에 실패하면 grok-4.6을 모르는 번들로
+# 폴백해 reasoning_effort를 거부하고 번역이 전건 실패한다(2f71a5d 참조).
+# 1.97~1.99는 Python 3.10에서 동작하지 않으므로(typing.NotRequired, pydantic
+# 전방참조) 3.10 환경은 1.96.2가 상한이다. 배포는 python:3.11-slim이라 무관.
+litellm>=1.100.0; python_version >= "3.11"
+litellm>=1.96.2,<1.97; python_version < "3.11"
 # Google Sheets
 gspread>=5.0.0
 google-auth>=2.0.0
