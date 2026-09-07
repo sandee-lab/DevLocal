@@ -3,7 +3,7 @@
 import re
 
 from config.constants import TAG_PATTERNS
-from config.glossary import get_glossary
+from config.glossary import get_glossary, get_spelling_fixes
 
 
 def validate_tags(source_ko: str, translated: str) -> dict:
@@ -59,22 +59,37 @@ def check_hangul_residue(source_ko: str, translated: str) -> dict:
     }
 
 
+def _fix_spelling(text: str, wrong: str, right: str) -> str:
+    """고유명사 오표기를 대소문자 무시로 찾아 정답 표기로 치환.
+
+    원문이 전부 대문자면(제목/강조 스타일) 교정 결과도 대문자로 유지한다.
+    """
+    def _sub(m: re.Match) -> str:
+        matched = m.group(0)
+        return right.upper() if matched.isupper() else right
+
+    return re.sub(re.escape(wrong), _sub, text, flags=re.IGNORECASE)
+
+
 def apply_glossary_postprocess(text: str, lang: str) -> str:
     """
     Glossary 강제 치환 — 번역 결과에서 오역된 Glossary 용어를 교정.
     JA 등급명 등 의역 금지 항목에 대해 str.replace() 적용.
+
+    2단계로 동작한다:
+      1) Glossary — 번역문에 한국어 원문 용어가 남아있으면 지정 번역으로 치환
+      2) 오표기 교정 — 이미 로마자화됐지만 철자가 다른 고유명사를 정답으로 통일
+         (1단계는 한글이 남은 경우만 잡으므로 Kamazon/Kwacha 같은 케이스는 못 막음)
     """
-    glossary = get_glossary()
-    lang_glossary = glossary.get(lang, {})
+    lang_glossary = get_glossary().get(lang, {})
 
-    if not lang_glossary:
-        return text
-
-    # 역방향 매핑: target → source_ko (잘못된 번역 감지용은 아님)
-    # 정방향: source_ko → target (원문에 한국어가 남아있으면 치환)
+    # 정방향: source_ko → target (번역문에 한국어가 남아있으면 치환)
     for ko_term, target_term in lang_glossary.items():
         if ko_term in text:
             text = text.replace(ko_term, target_term)
+
+    for wrong, right in get_spelling_fixes(lang).items():
+        text = _fix_spelling(text, wrong, right)
 
     return text
 

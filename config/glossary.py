@@ -11,6 +11,10 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent / ".app_config.json"
 # ── 하드코딩 fallback (초기 기본값) ──────────────────────────────────
 
 _DEFAULT_GLOSSARY: dict[str, dict[str, str]] = {
+    "en": {
+        "카마존": "Camazon",
+        "콰챠": "Quacha",
+    },
     "ja": {
         "카마존": "ニャマゾン",
         "일반": "一般",
@@ -20,6 +24,19 @@ _DEFAULT_GLOSSARY: dict[str, dict[str, str]] = {
         "전설": "伝説",
         "신화": "神話",
         "고대": "古代",
+    },
+}
+
+# 고유명사 로마자 오표기 교정 — Glossary 후처리만으로는 막을 수 없는 케이스를 처리.
+# apply_glossary_postprocess의 Glossary 치환은 "번역문에 한국어가 남은 경우"만
+# 동작하므로, LLM이 이미 다른 철자로 로마자화해버리면(Kamazon/Kwacha) 잡지 못한다.
+# 모델·실행마다 표기가 갈리는 것이 실측으로 확인되어(4.3=Kamazon/Quacha,
+# 4.6=Camazon/Kwacha) 정답 표기로 강제 통일한다.
+# 대소문자 무시 매칭이며, 원문이 전부 대문자면 교정 결과도 대문자로 유지한다.
+_DEFAULT_SPELLING_FIXES: dict[str, dict[str, str]] = {
+    "en": {
+        "Kamazon": "Camazon",
+        "Kwacha": "Quacha",
     },
 }
 
@@ -59,6 +76,15 @@ def get_glossary() -> dict[str, dict[str, str]]:
     if glossary and isinstance(glossary, dict):
         return glossary
     return _DEFAULT_GLOSSARY
+
+
+def get_spelling_fixes(lang: str) -> dict[str, str]:
+    """해당 언어의 고유명사 오표기 교정 맵 반환 — config 우선, fallback은 하드코딩."""
+    cfg = _load_config()
+    fixes = cfg.get("spelling_fixes")
+    if fixes and isinstance(fixes, dict):
+        return fixes.get(lang, {})
+    return _DEFAULT_SPELLING_FIXES.get(lang, {})
 
 
 def get_game_synopsis() -> str:
