@@ -10,3 +10,5 @@ __pycache__/
 !.claude/docs/
 .serena/
 scripts/_compare_*.json
+.venv/
+venv/

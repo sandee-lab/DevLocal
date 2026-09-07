@@ -15,15 +15,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Legacy**: Streamlit (app.py — 기존 버전, 별도 실행 가능)
 
 ## 개발 명령어
+Python은 **3.11 venv**를 쓴다 (`~/.venvs/devlocal`). 프로젝트가 OneDrive 동기화 폴더
+안이라 venv를 밖에 두었다. `$PY`는 `~/.venvs/devlocal/Scripts/python.exe`(Windows).
+
 ```bash
-./run_dev.sh                                    # FastAPI(8000) + Vite(5173) 동시 실행
-python3 -m uvicorn backend.main:app --reload --port 8000  # 백엔드만
+./run_dev.sh                                    # FastAPI(8000) + Vite(5173) 동시 실행 (venv 자동 사용)
+"$PY" -m uvicorn backend.main:app --reload --port 8000   # 백엔드만
+"$PY" scripts/verify_model.py                   # 모델 호출 검증
 cd frontend && npm run dev                      # 프론트엔드만
 cd frontend && npm run build                    # TypeScript 체크 + 프로덕션 빌드
 cd frontend && npm run lint                     # ESLint
-pip install -r backend/requirements.txt         # 백엔드 의존성
+"$PY" -m pip install -r backend/requirements.txt -r requirements.txt   # 의존성
 ./deploy.sh                                     # GCP Cloud Run 배포 (asia-northeast3)
 ```
+- **맨몸 `python`/`python3`를 쓰지 말 것** — 이 머신에서 `python`은 3.10, `python3`/`py`는
+  3.13을 가리키며 둘 다 프로젝트 의존성이 없거나 litellm 제약을 만족하지 못한다
 - Vite `/api` → `localhost:8000` 프록시 (`vite.config.ts`)
 - 테스트 프레임워크 미설정 (pytest, vitest 없음)
 - Dockerfile: 멀티스테이지 (Node 22 → Python 3.11-slim), Cloud Run 단일 컨테이너
