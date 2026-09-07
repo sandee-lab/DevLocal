@@ -154,6 +154,8 @@ def run_one(model: str, lang: str, rows: list[dict], api_key: str,
                 {"role": "user", "content": user_prompt},
             ],
             timeout=timeout, reasoning_effort=effort,
+            # litellm 모델맵 폴백 시 파라미터가 거부되는 것을 방지 (utils/llm.py 주석 참조)
+            allowed_openai_params=["reasoning_effort"],
             extra_headers={"x-grok-conv-id": conv_id} if conv_id else None,
         )
         content = llm_mod._strip_codeblock(response.choices[0].message.content)

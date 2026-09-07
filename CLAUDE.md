@@ -51,6 +51,7 @@ pip install -r backend/requirements.txt         # 백엔드 의존성
 ## LLM 설정
 - **모델**: `xai/grok-4.6` — **CHUNK_SIZE**: 50행 — **timeout**: 120초
 - **`reasoning_effort`는 반드시 `low`** (`LLM_REASONING_EFFORT`) — 4.6 기본값 high로 두면 장문 청크에서 reasoning 토큰이 4000~7000개로 폭증해 **timeout 실패 + 비용 3배**. low에서 reasoning 20~80개로 정상화
+- **`reasoning_effort`는 `allowed_openai_params`와 함께 보내야 한다** — litellm 1.85 번들 모델맵에 grok-4.6이 없어, 모델맵 원격 조회 실패 시 번들로 폴백해 파라미터를 "미지원" 판정하고 호출을 거부한다(`UnsupportedParamsError` → **번역 전건 실패**). 네트워크 상태에 따라 되다 말다 하므로 재현이 어렵다. `drop_params=True`는 금지 — 파라미터가 조용히 버려져 high로 되돌아간다
 - **가격** (2026-09 xAI 공식 docs.x.ai 확인): input **$2.00/1M**, output **$6.00/1M**, cached_input **$0.50/1M**
 - 모델 비교는 `scripts/compare_models.py` (실제 시트·실제 프롬프트로 결함률/비용/속도 측정, `모델@effort` 문법 지원)
 - **주의**: xAI/Grok은 `completion_tokens`와 `reasoning_tokens`를 별도 리포트 → **합산 필요** (OpenAI 표준과 다름)

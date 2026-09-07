@@ -121,8 +121,21 @@ def llm_json_call(
     extra_headers = {"x-grok-conv-id": conv_id} if conv_id else None
     # reasoning_effort는 값이 있을 때만 전달 — None이면 모델 기본값을 따른다
     # (grok-4.6은 기본 high라 장문 청크에서 timeout/비용 폭증. constants 주석 참조)
+    #
+    # allowed_openai_params가 반드시 필요하다: litellm은 파라미터 지원 여부를
+    # 모델맵으로 판정하는데, 1.85 번들 맵에는 grok-4.6이 없다. 맵을 원격에서
+    # 받아오지 못하면(네트워크 실패·오프라인·Cloud Run 이그레스 차단) 번들로
+    # 폴백해 "xai does not support reasoning_effort"로 호출 자체를 거부한다
+    # → 번역 전건 실패. 명시적으로 허용해 네트워크 상태와 무관하게 고정한다.
+    # drop_params=True는 해법이 아니다 — 파라미터가 조용히 버려져 기본값 high로
+    # 되돌아가 timeout이 재발한다.
     effort_kwargs = (
-        {"reasoning_effort": LLM_REASONING_EFFORT} if LLM_REASONING_EFFORT else {}
+        {
+            "reasoning_effort": LLM_REASONING_EFFORT,
+            "allowed_openai_params": ["reasoning_effort"],
+        }
+        if LLM_REASONING_EFFORT
+        else {}
     )
     response = litellm.completion(
         model=LLM_MODEL,
