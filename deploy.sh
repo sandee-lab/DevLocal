@@ -42,7 +42,9 @@ else
     echo "    인스턴스가 교체되면 진행 중 세션과 UI에서 변경한 설정이 유실됩니다."
 fi
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
-export IAP_AUDIENCE="/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${SERVICE_NAME}"
+# IAP audience는 deployment_env.py가 조립한다. 여기서 "/projects/..." 문자열을 만들어
+# 넘기면 Git Bash가 Windows 경로로 변환해 앱의 JWT 검증이 전부 실패한다.
+export PROJECT_NUMBER REGION SERVICE_NAME
 ENV_FILE=$(mktemp)
 chmod 600 "$ENV_FILE"
 trap 'rm -f "$ENV_FILE"' EXIT
