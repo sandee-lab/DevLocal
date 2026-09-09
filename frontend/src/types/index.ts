@@ -33,6 +33,7 @@ export interface StartResponse {
 
 export interface ApprovalRequest {
   decision: "approved" | "rejected";
+  decisions?: Record<string, "accepted" | "rejected">;
 }
 
 export interface SessionStateResponse {
@@ -49,6 +50,8 @@ export interface SessionStateResponse {
   failed_rows?: FailedRow[] | null;
   original_rows?: OriginalRow[] | null;
   total_rows?: number;
+  translations_applied?: boolean;
+  updates_count?: number;
 }
 
 /* ── Domain Types ── */
@@ -87,14 +90,6 @@ export interface FailedRow {
 }
 
 /* ── SSE Event Types ── */
-export type SSEEventType =
-  | "node_update"
-  | "ko_review_ready"
-  | "final_review_ready"
-  | "done"
-  | "error"
-  | "ping";
-
 export interface NodeUpdateData {
   node: string;
   step: string;

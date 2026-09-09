@@ -10,13 +10,11 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-# 시스템 패키지
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
 # Python 의존성
-COPY backend/requirements.txt backend/requirements.txt
-RUN pip install --no-cache-dir -r backend/requirements.txt
+# constraints.txt로 버전을 고정한다 — requirements.txt는 >= 만 선언하므로
+# 이것이 없으면 배포할 때마다 전 의존성이 최신으로 밀린다 (파일 헤더 참조).
+COPY backend/requirements.txt backend/constraints.txt backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt -c backend/constraints.txt
 
 # 소스 코드 복사
 COPY backend/ backend/

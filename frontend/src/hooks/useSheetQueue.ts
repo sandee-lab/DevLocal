@@ -12,16 +12,18 @@ export function useSheetQueue() {
   const allSheetsMode = useAppStore((s) => s.allSheetsMode);
   const sheetQueue = useAppStore((s) => s.sheetQueue);
   const currentSheetIndex = useAppStore((s) => s.currentSheetIndex);
+  const isWritingToSheet = useAppStore((s) => s.isWritingToSheet);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   useEffect(() => {
-    if (currentStep !== "done" || !allSheetsMode) return;
+    if (currentStep !== "done" || !allSheetsMode || isWritingToSheet) return;
     if (currentSheetIndex + 1 >= sheetQueue.length) return;
 
     timerRef.current = setTimeout(async () => {
       const s = useAppStore.getState();
       const nextSheet = sheetQueue[currentSheetIndex + 1];
       s.advanceSheetQueue();
+      s.setSelectedSheet(nextSheet);
       s.resetTranslationState();
       s.setSessionId(null);         // 구 SSE 즉시 종료 — late "done" 이벤트 수신 방지
       s.setCurrentStep("loading");
@@ -45,5 +47,5 @@ export function useSheetQueue() {
     }, 2000);
 
     return () => clearTimeout(timerRef.current);
-  }, [currentStep, allSheetsMode, currentSheetIndex, sheetQueue]);
+  }, [currentStep, allSheetsMode, currentSheetIndex, sheetQueue, isWritingToSheet]);
 }

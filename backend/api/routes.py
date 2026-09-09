@@ -4,7 +4,6 @@ import asyncio
 import io
 import json
 import logging
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -25,12 +24,14 @@ from backend.api.schemas import (
     StartResponse,
 )
 from backend.api.session_manager import session_manager
+from backend.persistence import SharedRoute, schedule, shared_stream
 from config.constants import (
+    FORBIDDEN_SHEETS,
     REQUIRED_COLUMNS,
     SUPPORTED_LANGUAGES,
-    Status,
-    TOOL_STATUS_COLUMN,
 )
+from config.app_config import load_config as _load_config, save_config as _save_config
+from utils.rows import merge_ko_reviews
 from utils.cost import build_cost_summary
 from utils.diff_report import generate_ko_diff_report, generate_translation_diff_report
 from utils.sheets import (
@@ -46,33 +47,8 @@ from utils.sheets import (
     save_backup_to_folder,
 )
 
-router = APIRouter()
+router = APIRouter(route_class=SharedRoute)
 executor = ThreadPoolExecutor(max_workers=4)
-
-# ── 로컬 설정 파일 ──────────────────────────────────────────────────
-_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / ".app_config.json"
-
-
-def _load_config() -> dict:
-    if _CONFIG_PATH.exists():
-        try:
-            return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
-def _save_config(data: dict):
-    try:
-        existing = _load_config()
-        existing.update(data)
-        _CONFIG_PATH.write_text(
-            json.dumps(existing, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except OSError as e:
-        logger.warning("Config save failed: %s", e)
-
 
 # ── Sheet Connection ─────────────────────────────────────────────────
 
@@ -97,8 +73,15 @@ def api_connect(req: ConnectRequest):
 @router.post("/start", response_model=StartResponse)
 def api_start(req: StartRequest):
     """번역 파이프라인 시작 — 세션 생성 + 데이터 준비"""
-    session = session_manager.create()
+    session = None
     try:
+        if req.sheet_name in FORBIDDEN_SHEETS:
+            raise ValueError("번역이 금지된 시트입니다")
+        session = session_manager.create()
+        session.sheet_url = req.sheet_url
+        session.current_step = "loading"
+        if session.publish is not None:
+            session.job = {"phase": "initial"}
         session.spreadsheet = connect_to_sheet(req.sheet_url)
         ws = session.spreadsheet.worksheet(req.sheet_name)
         df = load_sheet_data(ws)
@@ -113,7 +96,7 @@ def api_start(req: StartRequest):
         # 타겟 언어 결정 — 요청 언어(비어 있으면 전체 지원 언어) 중 시트에 컬럼이 있는 언어만
         requested_langs = req.target_languages or list(SUPPORTED_LANGUAGES)
         target_languages = [
-            lang for lang in requested_langs
+            lang for lang in dict.fromkeys(requested_langs)
             if SUPPORTED_LANGUAGES.get(lang) in df.columns
         ]
         if not target_languages:
@@ -125,10 +108,7 @@ def api_start(req: StartRequest):
 
         df = ensure_tool_status_column(ws, df)
 
-        if req.row_start > 0 and req.row_end > 0:
-            df = df.iloc[req.row_start - 1 : req.row_end]
-        elif req.row_end > 0:
-            df = df.head(req.row_end)
+        df = df.iloc[max(req.row_start - 1, 0):req.row_end or None]
 
         session.worksheet = ws
         session.df = df
@@ -163,14 +143,8 @@ def api_start(req: StartRequest):
             "translation_results": [],
             "review_results": [],
             "failed_rows": [],
-            "diff_report_ko": None,
-            "diff_report_translation": None,
-            "wait_for_ko_approval": False,
             "ko_approval_result": None,
-            "wait_for_final_approval": False,
             "final_approval_result": None,
-            "current_chunk_index": 0,
-            "total_chunks": 0,
             "retry_count": {},
             "total_input_tokens": 0,
             "total_output_tokens": 0,
@@ -188,73 +162,92 @@ def api_start(req: StartRequest):
                      session.id, req.sheet_name, req.mode)
         return StartResponse(session_id=session.id)
     except Exception as e:
-        session_manager.delete(session.id)
+        if session is not None:
+            session_manager.delete(session.id)
         logger.error("Pipeline start failed: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 
 # ── SSE Stream ───────────────────────────────────────────────────────
 
-def _make_emitter(session):
-    """노드에서 호출할 수 있는 이벤트 emitter 클로저 생성.
 
-    log_line 이벤트는 session.logs에도 실시간 append (lock 보호) →
-    LogsModal이 polling으로 phase 진행 중에도 라이브 로그를 볼 수 있게 함.
-    """
+def _initial_input(session, graph, config):
+    if session.publish is not None and graph.get_state(config).values:
+        return None
+    return session.initial_state
+
+
+def _translation_input(session, graph, config, decision):
+    if session.publish is not None:
+        state = graph.get_state(config)
+        if state.next != ("ko_approval",):
+            return None
+    return Command(resume=decision)
+
+def _make_emitter(session, graph=None):
+    """실행 그래프를 고정하여 취소된 작업의 로그·이벤트를 차단한다."""
+    graph = graph if graph is not None else session.graph
+
     def emit(event_type: str, data: dict):
-        # log_line 인터셉트 — session.logs에 라이브 추가
-        if event_type == "log_line" and isinstance(data, dict):
-            text = data.get("text", "")
-            if text:
-                try:
-                    with session.lock:
-                        session.logs.append(text)
-                except Exception as e:
-                    logger.warning("log_line append failed: %s", e)
-
-        queue = session.event_queue
-        loop = session._loop
-        if queue is None or loop is None:
-            logger.warning(
-                "emit skipped (queue/loop missing): session=%s event=%s",
-                session.id, event_type,
-            )
+        with session.lock:
+            if session.graph is not graph:
+                return
+            if event_type == "log_line" and data.get("text"):
+                session.logs.append(data["text"])
+            loop = session._loop
+        if session.publish is not None:
+            session.publish(event_type, data)
             return
+        if loop is None or loop.is_closed():
+            return
+
+        def enqueue():
+            with session.lock:
+                if session.graph is graph and session.event_queue is not None:
+                    session.event_queue.put_nowait((event_type, data))
         try:
-            asyncio.run_coroutine_threadsafe(
-                queue.put((event_type, data)),
-                loop,
-            )
-        except Exception as e:
-            logger.error(
-                "emit failed: session=%s event=%s error=%s",
-                session.id, event_type, e,
-            )
+            loop.call_soon_threadsafe(enqueue)
+        except RuntimeError:
+            logger.warning("종료된 SSE 이벤트 루프: %s", session.id)
     return emit
 
 
-def _make_config_with_emitter(session):
-    """event emitter가 주입된 그래프 config 반환"""
-    emitter = _make_emitter(session)
-    return {
-        **session.config,
+def _phase_context(session, graph=None, graph_config=None):
+    with session.lock:
+        graph = graph if graph is not None else session.graph
+        config = graph_config if graph_config is not None else session.config
+    emitter = _make_emitter(session, graph)
+    return graph, {
+        **config,
         "configurable": {
-            **session.config.get("configurable", {}),
-            "event_emitter": emitter,
+            **config["configurable"], "event_emitter": emitter,
+            "is_cancelled": lambda: session.graph is not graph or not session.is_current(),
         },
-    }
+    }, emitter
 
 
-def _run_initial_phase(session):
+def _phase_error(session, graph, error):
+    with session.lock:
+        if session.graph is not graph:
+            return
+        session.reset_graph()
+        session.current_step = "idle"
+    _make_emitter(session)("error", {"message": str(error)})
+
+
+def _run_initial_phase(session, graph=None, graph_config=None):
     """초기 phase 실행 (data_backup → context_glossary → ko_review → ko_approval interrupt)"""
-    emitter = _make_emitter(session)
+    graph, config, emitter = _phase_context(session, graph, graph_config)
+    if session.graph is not graph:
+        return
+    node_emitter = emitter
     try:
-        config = _make_config_with_emitter(session)
-        node_emitter = config["configurable"]["event_emitter"]
 
-        for event in session.graph.stream(
-            session.initial_state, config=config, stream_mode="updates"
+        for event in graph.stream(
+            _initial_input(session, graph, config), config=config, stream_mode="updates"
         ):
+            if session.graph is not graph:
+                return
             if "__interrupt__" in event:
                 emitter("interrupt", {})
                 break
@@ -282,11 +275,13 @@ def _run_initial_phase(session):
             })
 
         # ko_review 결과 수집
-        state_snapshot = session.graph.get_state(session.config)
+        state_snapshot = graph.get_state(config)
         result = state_snapshot.values
         ko_results_raw = result.get("ko_review_results", [])
 
         with session.lock:
+            if session.graph is not graph:
+                return
             session.graph_result = result
             session.logs = result.get("logs", [])
             session.current_step = "ko_review"
@@ -298,44 +293,7 @@ def _run_initial_phase(session):
                 result.get("total_reasoning_tokens", 0),
                 result.get("total_cached_tokens", 0),
             )
-        # row_index 우선 매핑 (중복 Key 대응) — ko_review_node가 _row_index를 직접 부여하므로
-        # 정상 경로에선 모든 항목이 row_index를 가짐. None은 비정상이므로 로그 후 fallback.
-        ko_result_by_ri = {r.get("row_index"): r for r in ko_results_raw if r.get("row_index") is not None}
-        ko_result_by_key: dict[str, list] = {}
-        orphan_count = 0
-        for r in ko_results_raw:
-            if r.get("row_index") is None:
-                ko_result_by_key.setdefault(r["key"], []).append(r)
-                orphan_count += 1
-        if orphan_count:
-            logger.warning(
-                "ko_review_results에 row_index 결손 항목 %d개 — key fallback 사용",
-                orphan_count,
-            )
-        key_consume: dict[str, int] = {}
-
-        original_data = result.get("original_data", [])
-        ko_results = []
-        for row in original_data:
-            key = row.get(REQUIRED_COLUMNS["key"], "")
-            ko_text = row.get(REQUIRED_COLUMNS["korean"], "")
-            ri = row.get("_row_index")
-            if ri is not None and ri in ko_result_by_ri:
-                ko_results.append(ko_result_by_ri[ri])
-                continue
-            # row_index가 없는 항목만 key fallback (비정상 경로)
-            bucket = ko_result_by_key.get(key)
-            if bucket:
-                idx = key_consume.get(key, 0)
-                if idx < len(bucket):
-                    ko_results.append(bucket[idx])
-                    key_consume[key] = idx + 1
-                    continue
-            # 매칭 실패 — 원본 그대로 (변경 없음)
-            ko_results.append({
-                "key": key, "original": ko_text, "revised": ko_text,
-                "comment": "", "has_issue": False, "row_index": ri,
-            })
+        ko_results = merge_ko_reviews(result.get("original_data", []), ko_results_raw)
 
         # KR diff 리포트 생성
         ko_report_data = None
@@ -351,9 +309,24 @@ def _run_initial_phase(session):
                 for r in ko_results
             ]
             report_df, report_csv = generate_ko_diff_report(original_rows, revised_rows)
-            session.ko_report_df = report_df
-            session.ko_report_csv = report_csv
+            with session.lock:
+                if session.graph is not graph:
+                    return
+                session.ko_report_df = report_df
+                session.ko_report_csv = report_csv
             ko_report_data = report_df.to_dict("records")
+
+        if not any(r.get("has_issue") for r in ko_results):
+            with session.lock:
+                if session.graph is not graph:
+                    return
+                session.current_step = "translating"
+                if session.publish is not None:
+                    session.job = {"phase": "translation", "decision": "approved"}
+            session.persist()
+            emitter("node_update", {"node": "translator", "step": "translating", "logs": session.logs})
+            _run_translation_phase(session, "approved", graph, config)
+            return
 
         emitter("ko_review_ready", {
             "results": ko_results,
@@ -361,8 +334,10 @@ def _run_initial_phase(session):
             "report": ko_report_data,
         })
     except Exception as e:
+        if session.graph is not graph:
+            return
         logger.error("Initial phase error for session %s: %s", session.id, e, exc_info=True)
-        emitter("error", {"message": str(e)})
+        _phase_error(session, graph, e)
 
 
 @router.get("/stream/{session_id}")
@@ -371,31 +346,35 @@ async def api_stream(session_id: str):
     session = session_manager.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if session.publish is not None:
+        return await shared_stream(session)
 
     logger.info("SSE stream opened: %s (step=%s)", session_id, session.current_step)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     with session.lock:
         session._loop = loop
-        # 이전 SSE 연결 무효화 — generation counter 증가
         session._sse_generation += 1
         current_gen = session._sse_generation
-        # Queue: 없을 때만 새로 생성 (SSE 재연결 시 기존 Queue 유지)
-        if session.event_queue is None:
-            session.event_queue = asyncio.Queue()
-        should_start = session.current_step == "loading"
-
-    # loading 상태일 때만 초기 phase 실행 (재연결 시 재실행 방지)
-    if should_start:
-        executor.submit(_run_initial_phase, session)
+        old_queue = session.event_queue
+        queue = asyncio.Queue()
+        if old_queue is not None:
+            while not old_queue.empty():
+                queue.put_nowait(old_queue.get_nowait())
+            old_queue.put_nowait(("_sse_close", {}))
+        session.event_queue = queue
+        should_start = session.current_step == "loading" and not session.initial_started
+        if should_start:
+            session.initial_started = True
+            schedule(executor, _run_initial_phase, session, session.graph, session.config)
 
     async def event_generator():
         while session._sse_generation == current_gen:
             try:
                 event_type, data = await asyncio.wait_for(
-                    session.event_queue.get(), timeout=300
+                    queue.get(), timeout=300
                 )
-                if event_type == "_sse_close":
+                if event_type == "_sse_close" or session._sse_generation != current_gen:
                     break
                 yield {"event": event_type, "data": json.dumps(data, ensure_ascii=False)}
                 if event_type in ("done", "error"):
@@ -408,15 +387,18 @@ async def api_stream(session_id: str):
 
 # ── HITL 1: KR Approval ─────────────────────────────────────────────
 
-def _run_translation_phase(session, resume_value: str):
+def _run_translation_phase(session, resume_value: str, graph=None, graph_config=None):
     """번역 phase 실행 (translator → reviewer → final_approval interrupt)"""
-    emitter = _make_emitter(session)
+    graph, config, emitter = _phase_context(session, graph, graph_config)
+    if session.graph is not graph:
+        return
     try:
-        config = _make_config_with_emitter(session)
 
-        for event in session.graph.stream(
-            Command(resume=resume_value), config, stream_mode="updates"
+        for event in graph.stream(
+            _translation_input(session, graph, config, resume_value), config, stream_mode="updates"
         ):
+            if session.graph is not graph:
+                return
             if "__interrupt__" in event:
                 break
 
@@ -431,9 +413,11 @@ def _run_translation_phase(session, resume_value: str):
             })
 
         # 결과 수집
-        state_snapshot = session.graph.get_state(session.config)
+        state_snapshot = graph.get_state(config)
         result = state_snapshot.values
         with session.lock:
+            if session.graph is not graph:
+                return
             session.graph_result = result
             session.logs = result.get("logs", [])
             session.current_step = "final_review"
@@ -448,8 +432,11 @@ def _run_translation_phase(session, resume_value: str):
                          "new": r["translated"], "reason": r.get("reason", "")}
                         for r in review_results]
             report_df, report_csv = generate_translation_diff_report(old_trans, new_trans)
-            session.translation_report_df = report_df
-            session.translation_report_csv = report_csv
+            with session.lock:
+                if session.graph is not graph:
+                    return
+                session.translation_report_df = report_df
+                session.translation_report_csv = report_csv
             report_data = report_df.to_dict("records")
 
         cost_summary = build_cost_summary(
@@ -466,8 +453,10 @@ def _run_translation_phase(session, resume_value: str):
             "cost": cost_summary,
         })
     except Exception as e:
+        if session.graph is not graph:
+            return
         logger.error("Translation phase error for session %s: %s", session.id, e, exc_info=True)
-        emitter("error", {"message": str(e)})
+        _phase_error(session, graph, e)
 
 
 @router.post("/approve-ko/{session_id}")
@@ -481,157 +470,163 @@ async def api_approve_ko(session_id: str, req: ApprovalRequest):
 
     loop = asyncio.get_event_loop()
     with session.lock:
-        session.ko_resume_value = req.decision
+        if session.current_step != "ko_review":
+            raise HTTPException(status_code=409, detail="한국어 승인 대기 상태가 아닙니다")
+        reviews = merge_ko_reviews(
+            session.graph_result.get("original_data", []),
+            session.graph_result.get("ko_review_results", []),
+        )
+        for review in reviews:
+            if req.decisions.get(f"ri_{review['row_index']}", req.decisions.get(review["key"])) == "rejected":
+                review.update(revised=review["original"], has_issue=False, comment="")
+        session.graph.update_state(session.config, {"ko_review_results": reviews})
         session.current_step = "translating"
         session._loop = loop
         # Cancel 후 재진입 시 SSE 재연결 전에 호출될 수 있으므로 queue 확보
         if session.event_queue is None:
             session.event_queue = asyncio.Queue()
 
-    # 백그라운드에서 번역 실행 (시트에는 Write하지 않음 — 최종 컨펌 시점에서 일괄 반영)
-    executor.submit(_run_translation_phase, session, req.decision)
+        # 작업 예약도 lock 안에서 처리하여 취소와 교차하지 않게 한다.
+        schedule(executor, _run_translation_phase, session, req.decision, session.graph, session.config)
 
     return {"status": "translating"}
-
-
-def _emit_done(session):
-    """SSE done 이벤트 전송 — EventSource 정상 종료용"""
-    try:
-        if session.event_queue and session._loop:
-            asyncio.run_coroutine_threadsafe(
-                session.event_queue.put(("done", {})),
-                session._loop,
-            )
-    except Exception:
-        pass
 
 
 # ── HITL 2: Final Approval ───────────────────────────────────────────
 
 @router.post("/approve-final/{session_id}")
-async def api_approve_final(session_id: str, req: ApprovalRequest):
-    """HITL 2: 최종 승인 → 시트 업데이트 / 거부 → 원복"""
+def api_approve_final(session_id: str, req: ApprovalRequest):
+    """동기 I/O는 FastAPI 작업 스레드에서 실행하고, 완료한 요청은 재사용한다."""
     session = session_manager.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    with session.lock:
+        if session.current_step == "done" and session.final_response is not None:
+            return session.final_response
+        if session.current_step != "final_review" or session.finalizing:
+            raise HTTPException(status_code=409, detail="최종 승인 대기 상태가 아닙니다")
+        if session.final_plan and req.decision != session.final_plan["decision"]:
+            raise HTTPException(status_code=409, detail="이미 저장된 승인 결정으로 재시도해야 합니다")
+        if req.decision == "rejected" and session.pending_updates is not None:
+            raise HTTPException(status_code=409, detail="시트 쓰기 재시도가 필요합니다")
+        session.finalizing = True
 
-    logger.info("Final approval: session=%s, decision=%s", session_id, req.decision)
-
-    config = session.config
-
-    if req.decision == "approved":
-        try:
-            # 최종 컨펌 직전 백업 생성 (시트 Write 전 안전장치)
-            if session.df is not None:
+    try:
+        if session.final_plan is None:
+            session.final_plan = req.model_dump()
+            session.persist()
+        req = ApprovalRequest(**session.final_plan)
+        approved = req.decision == "approved"
+        if approved:
+            if session.pending_updates is None:
+                reviews = session.graph_result.get("review_results", [])
+                accepted = [r for r in reviews if req.decisions.get(
+                    f"{r['row_index']}_{r['lang']}" if r.get("row_index") is not None
+                    else f"{r['key']}_{r['lang']}"
+                ) != "rejected"]
+                checkpoint = session.graph.get_state(session.config)
+                if checkpoint.next == ("final_approval",):
+                    session.graph.update_state(session.config, {"review_results": accepted})
+                if not checkpoint.next and checkpoint.values.get("final_approval_result") == "approved":
+                    result = checkpoint.values
+                else:
+                    result = session.graph.invoke(
+                        Command(resume="approved") if checkpoint.next == ("final_approval",) else None,
+                        config=session.config,
+                    )
+                with session.lock:
+                    session.graph_result = result
+                    session.logs = result.get("logs", [])
+                    session.pending_updates = result.get("_updates", [])
+                session.persist()
+            updates = session.pending_updates
+            if updates and session.worksheet is None and session.sheet_url:
+                session.spreadsheet = connect_to_sheet(session.sheet_url)
+                session.worksheet = session.spreadsheet.worksheet(session.initial_state["sheet_name"])
+            if updates and session.worksheet is not None and session.df is not None:
                 sheet_name = (session.initial_state or {}).get("sheet_name", "unknown")
-                backup_folder = _load_config().get("backup_folder", "./backups")
-                save_backup_to_folder(session.df, sheet_name, folder=backup_folder)
-
-            result = session.graph.invoke(Command(resume="approved"), config=config)
-            with session.lock:
-                session.graph_result = result
-                session.logs = result.get("logs", [])
-
-            updates = result.get("_updates", [])
-            if updates and session.worksheet and session.df is not None:
+                save_backup_to_folder(session.df, sheet_name, folder=_load_config().get("backup_folder", "./backups"))
                 batch_update_sheet(session.worksheet, updates, session.df)
                 try:
                     batch_format_cells(session.worksheet, updates, session.df)
-                except Exception as e:
-                    logger.warning("Cell formatting failed (non-critical): %s", e)
-
-            with session.lock:
-                session.current_step = "done"
-            _emit_done(session)
-            return {
-                "status": "done",
-                "updates_count": len(updates),
-                "translations_applied": True,
-            }
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    else:
-        # 거부: 중간 Write가 없으므로 원복 불필요 — 세션 정리만 수행
-        try:
-            session.graph.invoke(Command(resume="rejected"), config=config)
-        except Exception as e:
-            logger.warning("Rejected graph invoke failed (non-critical): %s", e)
-
+                except Exception as error:
+                    logger.warning("Cell formatting failed (non-critical): %s", error)
+        else:
+            checkpoint = session.graph.get_state(session.config)
+            if checkpoint.next:
+                session.graph.invoke(Command(resume="rejected"), config=session.config)
+            updates = []
+        response = {"status": "done", "updates_count": len(updates), "translations_applied": approved}
         with session.lock:
+            session.final_response = response
             session.current_step = "done"
-        _emit_done(session)
-        return {"status": "done", "translations_applied": False}
+        _make_emitter(session)("done", response)
+        return response
+    except Exception as error:
+        if isinstance(error, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    finally:
+        with session.lock:
+            session.finalizing = False
 
 
 # ── Cancel ───────────────────────────────────────────────────────────
 
+
+def _restore_cancelled_phase(session):
+    graph, config = session.graph, session.config
+    cancel_state = {**session.initial_state,
+                    "ko_review_results": session.cached_ko_review_results,
+                    "_ko_review_cached": True}
+    for key, value in zip(
+        ("total_input_tokens", "total_output_tokens", "total_reasoning_tokens", "total_cached_tokens"),
+        session.cached_ko_tokens,
+    ):
+        cancel_state[key] = value
+    existing = graph.get_state(config).values if session.publish is not None else None
+    for event in graph.stream(None if existing else cancel_state, config=config, stream_mode="updates"):
+        if "__interrupt__" in event:
+            break
+    result = graph.get_state(config).values
+    with session.lock:
+        session.graph_result = result
+        session.logs = result.get("logs", [])
+        session.current_step = "ko_review"
+    if session.publish is not None:
+        session.publish("ko_review_ready", {
+            "results": merge_ko_reviews(result.get("original_data", []), result.get("ko_review_results", [])),
+            "count": len(result.get("original_data", [])), "report": None,
+        })
+    return {"status": "ko_review"}
+
 @router.post("/cancel/{session_id}")
-def api_cancel(session_id: str):
-    """번역 취소 → ko_review로 복귀"""
+async def api_cancel(session_id: str):
+    """현재 실행을 무효화한 뒤 캐시로 한국어 승인 대기를 복원한다."""
     session = session_manager.get(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-
-    logger.info("Cancel: session=%s", session_id)
-
-    # ── 이전 SSE 즉시 종료 ──
-    # old queue에 _sse_close를 넣어 블로킹된 get()을 깨우고,
-    # generation을 증가시켜 event_generator 루프를 종료시킴
     with session.lock:
-        old_queue = session.event_queue
-        old_loop = session._loop
-        session._sse_generation += 1
-        session.event_queue = None
-    if old_queue and old_loop:
-        try:
-            asyncio.run_coroutine_threadsafe(
-                old_queue.put(("_sse_close", {})),
-                old_loop,
-            )
-        except Exception:
-            pass
+        if session.current_step not in {"translating", "final_review"} or session.finalizing or session.pending_updates is not None or session.final_plan is not None:
+            raise HTTPException(status_code=409, detail="취소할 수 있는 상태가 아닙니다")
+        session.reset_graph()
+        session.current_step = "loading"
+        session.initial_started = True
+        if session.publish is not None:
+            session.job = {"phase": "cancel"}
+        graph = session.graph
+        # 연결은 유지하되 취소 전 대기 이벤트만 비운다.
+        if session.event_queue is not None:
+            while not session.event_queue.empty():
+                session.event_queue.get_nowait()
 
-    from agents.graph import build_graph
-
-    # 그래프 재생성
-    session.graph, session.checkpointer = build_graph()
-    session.thread_id = str(uuid.uuid4())
-    session.config = {"configurable": {"thread_id": session.thread_id}}
-
-    if session.initial_state:
-        try:
-            # 캐시된 ko_review 결과 주입 → ko_review_node가 LLM 호출 건너뜀
-            cancel_state = {**session.initial_state}
-            if session.cached_ko_review_results:
-                cancel_state["ko_review_results"] = session.cached_ko_review_results
-                cancel_state["total_input_tokens"] = session.cached_ko_tokens[0]
-                cancel_state["total_output_tokens"] = session.cached_ko_tokens[1]
-                cancel_state["total_reasoning_tokens"] = session.cached_ko_tokens[2] if len(session.cached_ko_tokens) > 2 else 0
-                cancel_state["total_cached_tokens"] = session.cached_ko_tokens[3] if len(session.cached_ko_tokens) > 3 else 0
-                # logs는 비워둠 — data_backup/context_glossary가 새로 쌓고,
-                # ko_review_node는 캐시 히트 로그 1줄만 추가
-
-            for ev in session.graph.stream(
-                cancel_state, config=session.config, stream_mode="updates"
-            ):
-                if "__interrupt__" in ev:
-                    break
-
-            # 세션 복구용 상태 갱신
-            state_snapshot = session.graph.get_state(session.config)
-            with session.lock:
-                session.graph_result = state_snapshot.values
-                session.logs = session.graph_result.get("logs", [])
-                session.current_step = "ko_review"
-            return {"status": "ko_review"}
-        except Exception as e:
-            with session.lock:
-                session.current_step = "idle"
-            raise HTTPException(status_code=500, detail=str(e))
-
-    with session.lock:
-        session.current_step = "idle"
-    return {"status": "idle"}
+    try:
+        # 새 thread_id를 먼저 저장해 다른 서버의 취소 전 작업을 차단한다.
+        session.persist()
+        return await asyncio.to_thread(_restore_cancelled_phase, session)
+    except Exception as error:
+        _phase_error(session, graph, error)
+        raise HTTPException(status_code=500, detail=str(error)) from error
 
 
 # ── State Query ──────────────────────────────────────────────────────
@@ -643,6 +638,12 @@ def api_state(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    with session.lock:
+        result = session.graph_result or {}
+        current_step = session.current_step
+        logs = list(session.logs)
+        final_response = session.final_response or {}
+
     ko_count = 0
     review_count = 0
     fail_count = 0
@@ -653,62 +654,48 @@ def api_state(session_id: str):
     failed_rows_data = None
     original_rows_data = None
 
-    if session.graph_result:
-        ko_count = len(session.graph_result.get("ko_review_results", []))
-        review_count = len(session.graph_result.get("review_results", []))
-        fail_count = len(session.graph_result.get("failed_rows", []))
-        total_rows = len(session.graph_result.get("original_data", []))
+    if result:
+        ko_count = len(result.get("ko_review_results", []))
+        review_count = len(result.get("review_results", []))
+        fail_count = len(result.get("failed_rows", []))
+        total_rows = len(result.get("original_data", []))
         cost_summary = build_cost_summary(
-            session.graph_result.get("total_input_tokens", 0),
-            session.graph_result.get("total_output_tokens", 0),
-            session.graph_result.get("total_reasoning_tokens", 0),
-            session.graph_result.get("total_cached_tokens", 0),
+            result.get("total_input_tokens", 0),
+            result.get("total_output_tokens", 0),
+            result.get("total_reasoning_tokens", 0),
+            result.get("total_cached_tokens", 0),
         )
 
         # 세션 복원용: 테이블 표시를 위한 original_rows (loading/translating 포함)
-        orig = session.graph_result.get("original_data", [])
+        orig = result.get("original_data", [])
         if orig:
             original_rows_data = [
                 {"key": r.get(REQUIRED_COLUMNS["key"], ""),
-                 "korean": r.get(REQUIRED_COLUMNS["korean"], "")}
-                for r in orig
+                 "korean": r.get(REQUIRED_COLUMNS["korean"], ""),
+                 "row_index": r.get("_row_index", i)}
+                for i, r in enumerate(orig)
             ]
 
         # 세션 복원용: HITL 대기 단계일 때 실제 데이터 포함
-        if session.current_step == "ko_review":
-            ko_results_raw = session.graph_result.get("ko_review_results", [])
-            # row_index 우선 매핑 (중복 Key 대응)
-            ko_by_ri = {r.get("row_index"): r for r in ko_results_raw if r.get("row_index") is not None}
-            ko_by_key_first = {}
-            for r in ko_results_raw:
-                ko_by_key_first.setdefault(r.get("key", ""), r)
-            original_data = session.graph_result.get("original_data", [])
-            ko_review_results = []
-            for row in original_data:
-                key = row.get(REQUIRED_COLUMNS["key"], "")
-                ko_text = row.get(REQUIRED_COLUMNS["korean"], "")
-                ri = row.get("_row_index")
-                if ri is not None and ri in ko_by_ri:
-                    ko_review_results.append(ko_by_ri[ri])
-                elif key in ko_by_key_first:
-                    ko_review_results.append(ko_by_key_first[key])
-                else:
-                    ko_review_results.append({
-                        "key": key, "original": ko_text,
-                        "revised": ko_text, "comment": "", "has_issue": False,
-                    })
-        elif session.current_step == "final_review":
-            review_results_data = session.graph_result.get("review_results", [])
-            failed_rows_data = session.graph_result.get("failed_rows", [])
+        if current_step == "ko_review":
+            ko_results_raw = result.get("ko_review_results", [])
+            ko_review_results = merge_ko_reviews(
+                result.get("original_data", []), ko_results_raw,
+            )
+        elif current_step == "final_review":
+            review_results_data = result.get("review_results", [])
+            failed_rows_data = result.get("failed_rows", [])
 
     return SessionStateResponse(
         session_id=session.id,
-        current_step=session.current_step,
+        current_step=current_step,
         ko_review_count=ko_count,
         review_count=review_count,
         fail_count=fail_count,
         cost_summary=cost_summary,
-        logs=session.logs,
+        logs=logs,
+        translations_applied=final_response.get("translations_applied", False),
+        updates_count=final_response.get("updates_count", 0),
         ko_review_results=ko_review_results,
         review_results=review_results_data,
         failed_rows=failed_rows_data,
@@ -837,5 +824,8 @@ def api_get_config():
 @router.put("/config")
 def api_save_config(data: dict):
     """설정 저장"""
-    _save_config(data)
+    try:
+        _save_config(data)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail="설정을 저장하지 못했습니다") from error
     return {"status": "saved"}

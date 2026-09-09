@@ -12,7 +12,7 @@ import pandas as pd
 from google.oauth2.service_account import Credentials
 
 from backend.config import get_gcp_credentials
-from config.constants import FORBIDDEN_SHEETS, REQUIRED_COLUMNS, TOOL_STATUS_COLUMN
+from config.constants import FORBIDDEN_SHEETS, TOOL_STATUS_COLUMN
 
 logger = logging.getLogger("devlocal.sheets")
 
@@ -108,7 +108,7 @@ def ensure_tool_status_column(
         # 시트에도 헤더 추가
         col_idx = len(df.columns)
         _retry_with_backoff(
-            worksheet.update_cell, 1, col_idx, TOOL_STATUS_COLUMN
+            worksheet.update_cells, [gspread.Cell(1, col_idx, TOOL_STATUS_COLUMN)]
         )
         logger.info("Tool_Status 컬럼 추가 (col %d)", col_idx)
     return df
@@ -149,7 +149,7 @@ def batch_update_sheet(
     업데이트 목록을 gspread batch_update로 일괄 반영.
 
     updates 형식: [{"row_index": int, "column_name": str, "value": str}, ...]
-    row_index: 0-based DataFrame 인덱스 → 시트 행은 +2 (헤더 + 1-based)
+    row_index: 선택 범위 내 위치. DataFrame 인덱스로 원래 시트 행을 복원한다.
     """
     if not updates:
         return
@@ -163,9 +163,11 @@ def batch_update_sheet(
 
         if col_name not in columns:
             continue
+        if not isinstance(row_idx, int) or not 0 <= row_idx < len(df):
+            raise ValueError(f"유효하지 않은 행 위치: {row_idx}")
 
         col_idx = columns.index(col_name) + 1  # 1-based
-        sheet_row = row_idx + 2  # 헤더 + 0-based → 1-based
+        sheet_row = int(df.index[row_idx]) + 2
 
         cells.append(gspread.Cell(sheet_row, col_idx, u["value"]))
 
@@ -210,9 +212,11 @@ def batch_format_cells(
 
         if col_name not in columns:
             continue
+        if not isinstance(row_idx, int) or not 0 <= row_idx < len(df):
+            raise ValueError(f"유효하지 않은 행 위치: {row_idx}")
 
         col_idx = columns.index(col_name)
-        sheet_row = row_idx + 1  # 0-based (헤더 제외, API는 0-based)
+        sheet_row = int(df.index[row_idx]) + 1  # Sheets 서식 API는 0-based
 
         requests.append({
             "repeatCell": {

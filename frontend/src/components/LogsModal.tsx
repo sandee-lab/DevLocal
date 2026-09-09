@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { getLogs } from "../api/client";
 import { useFocusTrap } from "../hooks/useFocusTrap";
@@ -12,7 +12,6 @@ export default function LogsModal() {
   const open = useAppStore((s) => s.logsOpen);
   const setOpen = useAppStore((s) => s.setLogsOpen);
   const sessionId = useAppStore((s) => s.sessionId);
-  const storeLogs = useAppStore((s) => s.logs);
 
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -27,11 +26,11 @@ export default function LogsModal() {
 
   useFocusTrap(panelRef, open);
 
-  async function fetchLogs() {
+  const fetchLogs = useCallback(async () => {
     setError(null);
     if (!sessionId) {
       // 세션이 없으면 store에 쌓인 SSE 로그를 그대로 표시
-      setLogs(storeLogs);
+      setLogs(useAppStore.getState().logs);
       setCurrentStep("(no session)");
       return;
     }
@@ -43,18 +42,18 @@ export default function LogsModal() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       // 백엔드 호출 실패 시 store에 쌓인 SSE 로그라도 보여줌
-      setLogs(storeLogs);
+      setLogs(useAppStore.getState().logs);
     } finally {
       setLoading(false);
     }
-  }
+  }, [sessionId]);
 
   // 열릴 때 즉시 1회 로드
   useEffect(() => {
     if (!open) return;
     fetchLogs();
 
-  }, [open, sessionId]);
+  }, [open, fetchLogs]);
 
   // 자동 새로고침 (3초)
   useEffect(() => {
@@ -62,7 +61,7 @@ export default function LogsModal() {
     const id = setInterval(fetchLogs, 3000);
     return () => clearInterval(id);
 
-  }, [open, autoRefresh, sessionId]);
+  }, [open, autoRefresh, fetchLogs]);
 
   // 새 로그 도착 시 스크롤 하단 유지
   useEffect(() => {

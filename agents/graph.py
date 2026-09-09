@@ -1,7 +1,5 @@
-"""LangGraph 워크플로우 정의 — 6 Node + HITL 2곳 interrupt"""
+"""LangGraph 워크플로우 정의 — 8 Node + HITL 2곳 interrupt"""
 
-import re
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_core.runnables import RunnableConfig
@@ -15,11 +13,12 @@ from agents.nodes.data_backup import data_backup_node
 from agents.nodes.context_glossary import context_glossary_node
 from agents.nodes.translator import translator_node
 from utils.drip_feed import drip_feed_emit, emit_log_line, emit_log_lines
-from utils.llm import llm_chunk_with_completeness, split_warmup_tasks
+from utils.llm import llm_chunk_with_completeness, split_warmup_tasks, raise_if_cancelled
 from agents.nodes.reviewer import reviewer_node
 from agents.nodes.writer import writer_node
 from backend.config import get_xai_api_key
-from config.constants import REQUIRED_COLUMNS, CHUNK_SIZE, LLM_CHUNK_PARALLELISM, SUPPORTED_LANGUAGES, TAG_PATTERNS
+from config.constants import REQUIRED_COLUMNS, CHUNK_SIZE, LLM_CHUNK_PARALLELISM, SUPPORTED_LANGUAGES
+from utils.validation import validate_tags
 
 
 # ── 한국어 검수 노드 (AI 분석만, interrupt 없음) ─────────────────────
@@ -45,7 +44,7 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
 
     # ── Fast path: Cancel 복귀 시 캐시된 결과 재사용 (LLM 스킵) ──
     existing_results = state.get("ko_review_results", [])
-    if existing_results:
+    if existing_results or state.get("_ko_review_cached"):
         line = f"[한국어 검수] 캐시 결과 사용: {len(existing_results)}행 (스킵)"
         logs.append(line)
         emit_log_line(emitter, line)
@@ -107,10 +106,10 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
     for chunk_idx, chunk_start in enumerate(range(0, len(ko_rows), CHUNK_SIZE)):
         tasks.append((chunk_idx, ko_rows[chunk_start:chunk_start + CHUNK_SIZE]))
 
-    lock = threading.Lock()
     cumulative_done = 0
 
     def _process(chunk_idx: int, chunk: list[dict]):
+        raise_if_cancelled(config)
         if emitter:
             emitter("heartbeat", {
                 "node": "ko_review",
@@ -138,6 +137,13 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
             )
 
             for src, item in pairs:
+                original = src[REQUIRED_COLUMNS["korean"]]
+                revised = item.get("revised")
+                if not isinstance(revised, str) or not revised.strip():
+                    revised = original
+                item["key"] = src["key"]
+                item["original"] = original
+                item["revised"] = revised.replace("\n", "\\n").replace("\t", "\\t")
                 item["comment"] = item.pop("changes", "")
                 item["has_issue"] = item.get("original", "") != item.get("revised", "")
                 item["row_index"] = src.get("_row_index")
@@ -147,12 +153,7 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
                     original = src[REQUIRED_COLUMNS["korean"]]
                     revised = item.get("revised", "")
                     if original and revised:
-                        tag_broken = False
-                        for pattern in TAG_PATTERNS:
-                            if sorted(re.findall(pattern, original)) != sorted(re.findall(pattern, revised)):
-                                tag_broken = True
-                                break
-                        if tag_broken:
+                        if not validate_tags(original, revised)["valid"]:
                             item["revised"] = original
                             item["has_issue"] = False
                             item["comment"] = ""
@@ -160,8 +161,7 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
 
                 chunk_items_out.append(item)
 
-            # ko_review 프롬프트는 "변경 없는 행은 포함하지 마세요"라고 명시 → missing은 보통 정상 생략.
-            # 행별 스팸 로그 대신 청크 요약만 남긴다.
+            # 끝까지 누락된 행은 원본을 보존하고 청크 단위로 집계한다.
             for src in missing:
                 local_missing += 1
                 chunk_items_out.append({
@@ -216,8 +216,7 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
             with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
                 futures = [exe.submit(_process, *t) for t in rest_tasks]
                 for fut in as_completed(futures):
-                    with lock:
-                        _handle_result(fut.result())
+                    _handle_result(fut.result())
 
     if restored_count:
         line = f"[한국어 검수] 태그 손상 수정 {restored_count}건 원본 복원"
@@ -226,7 +225,7 @@ def ko_review_node(state: LocalizationState, config: RunnableConfig) -> dict:
     if missing_count:
         line = (
             f"[한국어 검수] 변경 없음 {missing_count}건 "
-            f"— LLM이 응답에서 생략 (원본 유지, 정상)"
+            f"— LLM 응답 누락 (원본 유지)"
         )
         logs.append(line)
         emit_log_line(emitter, line)
@@ -316,7 +315,7 @@ def should_write(state: LocalizationState) -> str:
 
 # ── 그래프 빌드 ───────────────────────────────────────────────────────
 
-def build_graph():
+def build_graph(checkpointer=None):
     """LangGraph StateGraph 구성 및 컴파일"""
     workflow = StateGraph(LocalizationState)
 
@@ -345,7 +344,7 @@ def build_graph():
     workflow.add_edge("writer", END)
 
     # 체크포인터 (MemorySaver — 세션 내 유지)
-    checkpointer = MemorySaver()
+    checkpointer = checkpointer if checkpointer is not None else MemorySaver()
     graph = workflow.compile(checkpointer=checkpointer)
 
     return graph, checkpointer

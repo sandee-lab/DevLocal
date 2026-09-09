@@ -17,7 +17,6 @@ interface AppState {
   botEmail: string;
   selectedSheet: string;
   mode: "A" | "B";
-  rowLimit: number;
 
   /* ── Project ── */
   projectName: string;
@@ -25,7 +24,6 @@ interface AppState {
   /* ── Session ── */
   sessionId: string | null;
   currentStep: AppStep;
-  previousStep: AppStep | null;
 
   /* ── KR Review (HITL 1) ── */
   koReviewResults: KoReviewItem[];
@@ -36,7 +34,6 @@ interface AppState {
   reviewDecisions: Record<string, "accepted" | "rejected">;
   failedRows: FailedRow[];
   selectedLang: string;
-  reviewPage: number;
 
   /* ── Chunk Streaming (실시간 진행) ── */
   originalRows: OriginalRow[];
@@ -87,7 +84,6 @@ interface AppState {
   setSelectedSheet: (name: string) => void;
   setProjectName: (name: string) => void;
   setMode: (mode: "A" | "B") => void;
-  setRowLimit: (limit: number) => void;
   setSessionId: (id: string | null) => void;
   setCurrentStep: (step: AppStep) => void;
   setKoReviewResults: (results: KoReviewItem[]) => void;
@@ -96,7 +92,6 @@ interface AppState {
   setReviewDecision: (key: string, decision: "accepted" | "rejected") => void;
   setFailedRows: (rows: FailedRow[]) => void;
   setSelectedLang: (lang: string) => void;
-  setReviewPage: (page: number) => void;
   setOriginalRows: (rows: OriginalRow[]) => void;
   appendPartialKoResults: (results: KoReviewItem[]) => void;
   appendPartialTranslations: (results: TranslationChunkItem[]) => void;
@@ -131,17 +126,14 @@ const initialState = {
   selectedSheet: "",
   projectName: "",
   mode: "A" as const,
-  rowLimit: 0,
   sessionId: null as string | null,
   currentStep: "idle" as AppStep,
-  previousStep: null as AppStep | null,
   koReviewResults: [] as KoReviewItem[],
   koDecisions: {} as Record<string, "accepted" | "rejected">,
   reviewResults: [] as ReviewItem[],
   reviewDecisions: {} as Record<string, "accepted" | "rejected">,
   failedRows: [] as FailedRow[],
   selectedLang: "en",
-  reviewPage: 1,
   originalRows: [] as OriginalRow[],
   partialKoResults: [] as KoReviewItem[],
   partialTranslations: [] as TranslationChunkItem[],
@@ -177,7 +169,6 @@ export const useAppStore = create<AppState>((set) => ({
   setSelectedSheet: (name) => set({ selectedSheet: name }),
   setProjectName: (name) => set({ projectName: name }),
   setMode: (mode) => set({ mode }),
-  setRowLimit: (limit) => set({ rowLimit: limit }),
   setSessionId: (id) => {
     set({ sessionId: id });
     if (id) localStorage.setItem("devlocal_session_id", id);
@@ -186,9 +177,8 @@ export const useAppStore = create<AppState>((set) => ({
   setCurrentStep: (step) =>
     set((s) => ({
       currentStep: step,
-      previousStep: s.currentStep,
       // translating 진입 시 progress 리셋 + 스트리밍 데이터 초기화
-      ...(step === "translating"
+      ...(step === "translating" && s.currentStep !== step
         ? {
             progressPercent: 0,
             progressLabel: "Starting translation...",
@@ -207,7 +197,6 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   setFailedRows: (rows) => set({ failedRows: rows }),
   setSelectedLang: (lang) => set({ selectedLang: lang }),
-  setReviewPage: (page) => set({ reviewPage: page }),
   setOriginalRows: (rows) => set({ originalRows: rows }),
   appendPartialKoResults: (results) =>
     set((s) => ({ partialKoResults: [...s.partialKoResults, ...results] })),
@@ -248,6 +237,9 @@ export const useAppStore = create<AppState>((set) => ({
       failedRows: [],
       partialTranslations: [],
       partialReviews: [],
+      totalRows: 0,
+      lastHeartbeatAt: null,
+      logs: [],
       // Streaming & Metrics
       originalRows: [],
       chunkProgress: null,
@@ -257,7 +249,6 @@ export const useAppStore = create<AppState>((set) => ({
       progressLabel: "",
       translationsApplied: false,
       selectedLang: "en",
-      reviewPage: 1,
     }),
   reset: () => {
     localStorage.removeItem("devlocal_session_id");

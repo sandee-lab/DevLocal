@@ -1,6 +1,5 @@
 """Node 4: 검수 (LLM + Regex) — 태그 검증, Glossary 후처리, AI 품질 검증 (청크 배치)"""
 
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_core.runnables import RunnableConfig
@@ -15,7 +14,8 @@ from config.constants import (
     SUPPORTED_LANGUAGES,
 )
 from utils.drip_feed import drip_feed_emit, emit_log_line, emit_log_lines
-from utils.llm import llm_chunk_with_completeness, split_warmup_tasks
+from utils.llm import llm_chunk_with_completeness, split_warmup_tasks, raise_if_cancelled
+from utils.rows import reviewed_source_rows
 from config.glossary import format_glossary_text
 from utils.validation import (
     apply_glossary_postprocess,
@@ -59,7 +59,7 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
     # xAI Grok prompt caching 라우팅 키 — 같은 thread_id 요청을 같은 서버로 보내 캐시 prefix 공유
     conv_id = config.get("configurable", {}).get("thread_id") if config else None
 
-    original_data = state.get("original_data", [])
+    original_data = reviewed_source_rows(state)
     translation_results = list(state.get("translation_results", []))
     prev_review_results = list(state.get("review_results", []))
 
@@ -108,6 +108,10 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
             continue
 
         if not translated:
+            failed_rows.append({
+                "key": key, "lang": lang, "row_index": row_index,
+                "reason": "번역 결과가 비어 있습니다",
+            })
             continue
 
         if row_index is not None and row_index in original_by_ri:
@@ -127,7 +131,7 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
         regex_errors = tag_result["errors"] + hangul_result["errors"]
 
         if regex_errors:
-            count_key = f"{key}_{lang}"
+            count_key = f"{row_index if row_index is not None else key}_{lang}"
             current = retry_count.get(count_key, 0)
 
             if current < MAX_RETRY_COUNT:
@@ -224,7 +228,6 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
         progress_total = max(len(prev_review_results) + len(failed_rows), 1)
 
     new_review_results: list[dict] = list(unchanged_results)
-    lock = threading.Lock()
     cumulative_done = len(prev_review_results)
 
     # 초기 진행률 신호 + unchanged 결과 drip-feed (LLM 호출 전 즉시 발행)
@@ -262,6 +265,7 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
             tasks.append((lang, chunk_idx, total_chunks, items[start:end], system_prompt))
 
     def _process(lang: str, chunk_idx: int, total_chunks: int, chunk: list[dict], system_prompt: str):
+        raise_if_cancelled(config)
         if emitter:
             emitter("heartbeat", {
                 "node": "reviewer",
@@ -363,8 +367,7 @@ def reviewer_node(state: LocalizationState, config: RunnableConfig) -> dict:
             with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
                 futures = [exe.submit(_process, *t) for t in rest_tasks]
                 for fut in as_completed(futures):
-                    with lock:
-                        _handle_review_result(fut.result())
+                    _handle_review_result(fut.result())
 
     all_review_results = prev_review_results + new_review_results
 

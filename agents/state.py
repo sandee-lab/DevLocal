@@ -17,19 +17,11 @@ class LocalizationState(TypedDict):
     review_results: list[dict]      # 검수 결과
     failed_rows: list[dict]         # 검수실패 행 목록
 
-    # 리포트
-    diff_report_ko: Optional[str]            # 한국어 변경 리포트 (CSV 경로)
-    diff_report_translation: Optional[str]   # 번역 변경 리포트 (CSV 경로)
-
     # HITL 제어
-    wait_for_ko_approval: bool
     ko_approval_result: Optional[str]        # "approved" or "rejected"
-    wait_for_final_approval: bool
     final_approval_result: Optional[str]
 
     # 진행 상태
-    current_chunk_index: int
-    total_chunks: int
     retry_count: dict  # {row_key: retry_count}
 
     # 비용 추적
@@ -51,3 +43,4 @@ class LocalizationState(TypedDict):
     # 내부 전달용
     _updates: list[dict]          # writer → app.py 시트 업데이트 목록
     _needs_retry: list[dict]      # reviewer → translator 재번역 필요 항목
+    _ko_review_cached: bool      # 취소 복구 시 빈 검수 결과도 재사용

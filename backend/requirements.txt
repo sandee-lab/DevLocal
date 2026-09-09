@@ -18,3 +18,6 @@ gspread>=5.0.0
 google-auth>=2.0.0
 # Data
 pandas>=1.3.0
+# 공유 세션·체크포인트 (로컬 메모리 모드는 기존 동작 유지)
+langgraph-checkpoint-postgres>=3.1.2,<4
+psycopg[binary,pool]>=3.3.5,<4

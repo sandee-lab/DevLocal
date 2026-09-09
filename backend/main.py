@@ -1,9 +1,11 @@
 """FastAPI 메인 앱"""
 
 import logging
+import asyncio
 import os
 import sys
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -17,14 +19,43 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api.routes import router
 
-app = FastAPI(title="DevLocal API", version="2.0.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    validate_environment()
+    from backend.auth import validate_auth_environment
+    from backend import persistence
+    from config.app_config import use_shared_store
+    validate_auth_environment()
+    database_url = os.environ.get("DATABASE_URL")
+    if os.environ.get("K_SERVICE") and not database_url:
+        raise RuntimeError("Cloud Run에서는 공유 PostgreSQL DATABASE_URL이 필요합니다")
+    store = None
+    try:
+        if database_url:
+            from backend.storage import PostgresStorage
+            store = PostgresStorage(database_url)
+            await asyncio.to_thread(store.setup)
+            use_shared_store(store)
+            persistence.runtime = persistence.Runtime(store)
+            persistence.runtime.thread.start()
+        yield
+    finally:
+        if persistence.runtime is not None:
+            await asyncio.to_thread(persistence.runtime.close)
+            persistence.runtime = None
+        elif store is not None:
+            store.close()
+        use_shared_store(None)
+
+
+app = FastAPI(title="DevLocal API", version="2.0.0", lifespan=lifespan)
 
 # CORS — 개발 환경용 (프로덕션 단일 컨테이너에서는 same-origin이라 불필요)
 _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173").split(",")
@@ -35,24 +66,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+from backend.auth import AuthenticationMiddleware
+app.add_middleware(AuthenticationMiddleware)
+
+
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
 
 app.include_router(router, prefix="/api")
 
 # ── 정적 파일 서빙 (프로덕션: React 빌드 결과물) ──
 _STATIC_DIR = _PROJECT_ROOT / "frontend" / "dist"
+
+async def serve_spa(full_path: str):
+    """빌드 디렉터리 내부 파일만 제공하고, 앱 경로에는 index.html을 반환한다."""
+    file_path = (_STATIC_DIR / full_path).resolve()
+    if (
+        full_path == "api" or full_path.startswith("api/")
+        or not file_path.is_relative_to(_STATIC_DIR.resolve())
+    ):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path if file_path.is_file() else _STATIC_DIR / "index.html")
+
+
 if _STATIC_DIR.exists():
     app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
-
-    @app.get("/{full_path:path}")
-    async def serve_spa(request: Request, full_path: str):
-        """API 외 모든 경로 → index.html (SPA fallback)"""
-        file_path = _STATIC_DIR / full_path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        return FileResponse(_STATIC_DIR / "index.html")
+    app.get("/{full_path:path}")(serve_spa)
 
 
-@app.on_event("startup")
 def validate_environment():
     from backend.config import get_xai_api_key, get_gcp_credentials
 

@@ -133,8 +133,8 @@ export default function DoneScreen() {
             window.open(getDownloadUrl(sessionId, "translation_report"));
         }}
         onAction={() => reset()}
-        actionLabel={isWritingToSheet ? "Writing to Sheet..." : translationsApplied ? "New Session" : "Push to Sheets"}
-        actionIcon={isWritingToSheet ? "progress_activity" : translationsApplied ? "arrow_forward" : "cloud_upload"}
+        actionLabel={isWritingToSheet ? "Writing to Sheet..." : "New Session"}
+        actionIcon={isWritingToSheet ? "progress_activity" : "arrow_forward"}
         actionDisabled={isWritingToSheet}
       />
     </>

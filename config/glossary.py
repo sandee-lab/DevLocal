@@ -1,12 +1,6 @@
 """게임 설정 로더 — Glossary, 시놉시스, 톤앤매너를 .app_config.json에서 로드 (fallback 내장)"""
 
-import json
-import logging
-from pathlib import Path
-
-logger = logging.getLogger("devlocal.glossary")
-
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / ".app_config.json"
+from config.app_config import load_config as _load_config
 
 # ── 하드코딩 fallback (초기 기본값) ──────────────────────────────────
 
@@ -54,26 +48,13 @@ _DEFAULT_TONE_AND_MANNER = (
 )
 
 
-# ── Config 로더 (내부) ───────────────────────────────────────────────
-
-def _load_config() -> dict:
-    """`.app_config.json` 전체를 파싱하여 반환. 파일 없거나 파싱 실패 시 {}."""
-    if not _CONFIG_PATH.exists():
-        return {}
-    try:
-        return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning("Config load failed: %s", e)
-        return {}
-
-
 # ── Public API ───────────────────────────────────────────────────────
 
 def get_glossary() -> dict[str, dict[str, str]]:
     """현재 유효한 glossary 반환 — config 우선, fallback은 하드코딩."""
     cfg = _load_config()
     glossary = cfg.get("glossary")
-    if glossary and isinstance(glossary, dict):
+    if isinstance(glossary, dict):
         return glossary
     return _DEFAULT_GLOSSARY
 
@@ -82,7 +63,7 @@ def get_spelling_fixes(lang: str) -> dict[str, str]:
     """해당 언어의 고유명사 오표기 교정 맵 반환 — config 우선, fallback은 하드코딩."""
     cfg = _load_config()
     fixes = cfg.get("spelling_fixes")
-    if fixes and isinstance(fixes, dict):
+    if isinstance(fixes, dict):
         return fixes.get(lang, {})
     return _DEFAULT_SPELLING_FIXES.get(lang, {})
 

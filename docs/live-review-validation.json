@@ -1,0 +1,1243 @@
+{
+  "model": "xai/grok-4.6",
+  "effort": "low",
+  "calls": [
+    {
+      "number": 1,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 2103,
+        "output": 2982,
+        "reasoning": 110,
+        "cached": 512
+      },
+      "seconds": 35.09
+    },
+    {
+      "number": 2,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1799,
+        "output": 486,
+        "reasoning": 276,
+        "cached": 512
+      },
+      "seconds": 7.6
+    },
+    {
+      "number": 3,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1847,
+        "output": 624,
+        "reasoning": 396,
+        "cached": 512
+      },
+      "seconds": 9.26
+    },
+    {
+      "number": 4,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1826,
+        "output": 425,
+        "reasoning": 208,
+        "cached": 768
+      },
+      "seconds": 7.26
+    },
+    {
+      "number": 5,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1826,
+        "output": 573,
+        "reasoning": 351,
+        "cached": 768
+      },
+      "seconds": 8.13
+    },
+    {
+      "number": 6,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1574,
+        "output": 773,
+        "reasoning": 292,
+        "cached": 512
+      },
+      "seconds": 12.46
+    },
+    {
+      "number": 7,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1650,
+        "output": 863,
+        "reasoning": 361,
+        "cached": 512
+      },
+      "seconds": 15.38
+    },
+    {
+      "number": 8,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1638,
+        "output": 984,
+        "reasoning": 435,
+        "cached": 896
+      },
+      "seconds": 16.14
+    },
+    {
+      "number": 9,
+      "ok": true,
+      "returned_model": "grok-4.6",
+      "usage": {
+        "input": 1643,
+        "output": 720,
+        "reasoning": 249,
+        "cached": 896
+      },
+      "seconds": 10.46
+    }
+  ],
+  "checks": [
+    {
+      "name": "한국어 50행 모두 반환",
+      "passed": true
+    },
+    {
+      "name": "한국어 50행 응답 누락·호출 오류 없음",
+      "passed": true
+    },
+    {
+      "name": "중복 Key 한국어 원문 매핑 보존",
+      "passed": true
+    },
+    {
+      "name": "한국어 교정 태그 보존",
+      "passed": true
+    },
+    {
+      "name": "실제 교정 제안 생성",
+      "passed": true
+    },
+    {
+      "name": "한국어 승인 대기 도달",
+      "passed": true
+    },
+    {
+      "name": "최종 승인 대기 도달",
+      "passed": true
+    },
+    {
+      "name": "4개 언어 × 10행 = 40건 검수 결과",
+      "passed": true
+    },
+    {
+      "name": "번역 실패 0건",
+      "passed": true
+    },
+    {
+      "name": "행·언어 조합 중복/누락 없음",
+      "passed": true
+    },
+    {
+      "name": "거부한 한국어 교정은 원문으로 번역·검수",
+      "passed": true
+    },
+    {
+      "name": "번역 태그 및 한글 잔존 검사",
+      "passed": true
+    },
+    {
+      "name": "실제 개행·탭이 리터럴로 복원됨",
+      "passed": true
+    },
+    {
+      "name": "AI 검수 응답 누락·호출 오류 없음",
+      "passed": true
+    },
+    {
+      "name": "거부한 영어 셀은 쓰기 목록에서 제외",
+      "passed": true
+    },
+    {
+      "name": "선택 범위 원래 행 9~18에만 쓰기",
+      "passed": true
+    },
+    {
+      "name": "최종 완료 및 중복 승인 재사용",
+      "passed": true
+    },
+    {
+      "name": "Batch 시트 쓰기 1회만 준비",
+      "passed": true
+    }
+  ],
+  "ko_50_results": [
+    {
+      "key": "duplicate",
+      "original": "체력이 {hp}만큼 회복 됨니다.",
+      "revised": "체력이 {hp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 0
+    },
+    {
+      "key": "duplicate",
+      "original": "마나가 {mp}만큼 회복 됨니다.",
+      "revised": "마나가 {mp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 1
+    },
+    {
+      "key": "newline",
+      "original": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "revised": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 2
+    },
+    {
+      "key": "tab",
+      "original": "이름\\t점수",
+      "revised": "이름\\t점수",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 3
+    },
+    {
+      "key": "color",
+      "original": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "revised": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 4
+    },
+    {
+      "key": "bold",
+      "original": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "revised": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 5
+    },
+    {
+      "key": "printf",
+      "original": "%d번째 도전: %s",
+      "revised": "%d번째 도전: %s",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 6
+    },
+    {
+      "key": "grade",
+      "original": "신화",
+      "revised": "신화",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 7
+    },
+    {
+      "key": "number",
+      "original": "다음 레벨까지 {exp}/{max}",
+      "revised": "다음 레벨까지 {exp}/{max}",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 8
+    },
+    {
+      "key": "unchanged",
+      "original": "서버 점검 중입니다.",
+      "revised": "서버 점검 중입니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 9
+    },
+    {
+      "key": "sample_10",
+      "original": "체력이 {hp}만큼 회복 됨니다.",
+      "revised": "체력이 {hp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 10
+    },
+    {
+      "key": "sample_11",
+      "original": "마나가 {mp}만큼 회복 됨니다.",
+      "revised": "마나가 {mp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 11
+    },
+    {
+      "key": "sample_12",
+      "original": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "revised": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 12
+    },
+    {
+      "key": "sample_13",
+      "original": "이름\\t점수",
+      "revised": "이름\\t점수",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 13
+    },
+    {
+      "key": "sample_14",
+      "original": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "revised": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 14
+    },
+    {
+      "key": "sample_15",
+      "original": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "revised": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 15
+    },
+    {
+      "key": "sample_16",
+      "original": "%d번째 도전: %s",
+      "revised": "%d번째 도전: %s",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 16
+    },
+    {
+      "key": "sample_17",
+      "original": "신화",
+      "revised": "신화",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 17
+    },
+    {
+      "key": "sample_18",
+      "original": "다음 레벨까지 {exp}/{max}",
+      "revised": "다음 레벨까지 {exp}/{max}",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 18
+    },
+    {
+      "key": "sample_19",
+      "original": "서버 점검 중입니다.",
+      "revised": "서버 점검 중입니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 19
+    },
+    {
+      "key": "sample_20",
+      "original": "체력이 {hp}만큼 회복 됨니다.",
+      "revised": "체력이 {hp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 20
+    },
+    {
+      "key": "sample_21",
+      "original": "마나가 {mp}만큼 회복 됨니다.",
+      "revised": "마나가 {mp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 21
+    },
+    {
+      "key": "sample_22",
+      "original": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "revised": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 22
+    },
+    {
+      "key": "sample_23",
+      "original": "이름\\t점수",
+      "revised": "이름\\t점수",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 23
+    },
+    {
+      "key": "sample_24",
+      "original": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "revised": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 24
+    },
+    {
+      "key": "sample_25",
+      "original": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "revised": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 25
+    },
+    {
+      "key": "sample_26",
+      "original": "%d번째 도전: %s",
+      "revised": "%d번째 도전: %s",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 26
+    },
+    {
+      "key": "sample_27",
+      "original": "신화",
+      "revised": "신화",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 27
+    },
+    {
+      "key": "sample_28",
+      "original": "다음 레벨까지 {exp}/{max}",
+      "revised": "다음 레벨까지 {exp}/{max}",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 28
+    },
+    {
+      "key": "sample_29",
+      "original": "서버 점검 중입니다.",
+      "revised": "서버 점검 중입니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 29
+    },
+    {
+      "key": "sample_30",
+      "original": "체력이 {hp}만큼 회복 됨니다.",
+      "revised": "체력이 {hp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 30
+    },
+    {
+      "key": "sample_31",
+      "original": "마나가 {mp}만큼 회복 됨니다.",
+      "revised": "마나가 {mp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 31
+    },
+    {
+      "key": "sample_32",
+      "original": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "revised": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 32
+    },
+    {
+      "key": "sample_33",
+      "original": "이름\\t점수",
+      "revised": "이름\\t점수",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 33
+    },
+    {
+      "key": "sample_34",
+      "original": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "revised": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 34
+    },
+    {
+      "key": "sample_35",
+      "original": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "revised": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 35
+    },
+    {
+      "key": "sample_36",
+      "original": "%d번째 도전: %s",
+      "revised": "%d번째 도전: %s",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 36
+    },
+    {
+      "key": "sample_37",
+      "original": "신화",
+      "revised": "신화",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 37
+    },
+    {
+      "key": "sample_38",
+      "original": "다음 레벨까지 {exp}/{max}",
+      "revised": "다음 레벨까지 {exp}/{max}",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 38
+    },
+    {
+      "key": "sample_39",
+      "original": "서버 점검 중입니다.",
+      "revised": "서버 점검 중입니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 39
+    },
+    {
+      "key": "sample_40",
+      "original": "체력이 {hp}만큼 회복 됨니다.",
+      "revised": "체력이 {hp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 40
+    },
+    {
+      "key": "sample_41",
+      "original": "마나가 {mp}만큼 회복 됨니다.",
+      "revised": "마나가 {mp}만큼 회복됩니다.",
+      "comment": "띄어쓰기 및 맞춤법: '회복 됨니다' → '회복됩니다'",
+      "has_issue": true,
+      "row_index": 41
+    },
+    {
+      "key": "sample_42",
+      "original": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "revised": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 42
+    },
+    {
+      "key": "sample_43",
+      "original": "이름\\t점수",
+      "revised": "이름\\t점수",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 43
+    },
+    {
+      "key": "sample_44",
+      "original": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "revised": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 44
+    },
+    {
+      "key": "sample_45",
+      "original": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "revised": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 45
+    },
+    {
+      "key": "sample_46",
+      "original": "%d번째 도전: %s",
+      "revised": "%d번째 도전: %s",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 46
+    },
+    {
+      "key": "sample_47",
+      "original": "신화",
+      "revised": "신화",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 47
+    },
+    {
+      "key": "sample_48",
+      "original": "다음 레벨까지 {exp}/{max}",
+      "revised": "다음 레벨까지 {exp}/{max}",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 48
+    },
+    {
+      "key": "sample_49",
+      "original": "서버 점검 중입니다.",
+      "revised": "서버 점검 중입니다.",
+      "comment": "",
+      "has_issue": false,
+      "row_index": 49
+    }
+  ],
+  "ko_50_logs": [
+    "[한국어 검수] 대상: 50행",
+    "[한국어 검수] 청크 1/1 완료 — 수정 제안 50건, 변경 없음 0건",
+    "[한국어 검수] 최종 수정 제안: 10건"
+  ],
+  "reviews": [
+    {
+      "key": "duplicate",
+      "lang": "en",
+      "translated": "HP restored by {hp}.",
+      "old_translation": "",
+      "original_ko": "체력이 {hp}만큼 회복 됨니다.",
+      "reason": "{hp} 태그가 유지되었고 체력 회복 의미가 캐주얼하게 전달됨.",
+      "row_index": 0
+    },
+    {
+      "key": "duplicate",
+      "lang": "en",
+      "translated": "MP restored by {mp}.",
+      "old_translation": "",
+      "original_ko": "마나가 {mp}만큼 회복됩니다.",
+      "reason": "{mp} 태그가 유지되었고 마나 회복 의미가 자연스럽게 전달됨.",
+      "row_index": 1
+    },
+    {
+      "key": "newline",
+      "lang": "en",
+      "translated": "Grab your rewards.\\nStart your next adventure.",
+      "old_translation": "",
+      "original_ko": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "reason": "\\n이 보존되었고 보상·다음 모험 안내가 유머러스하고 캐주얼함.",
+      "row_index": 2
+    },
+    {
+      "key": "tab",
+      "lang": "en",
+      "translated": "Name\\tScore",
+      "old_translation": "",
+      "original_ko": "이름\\t점수",
+      "reason": "\\t가 유지되었고 이름/점수 표기 의미가 정확함.",
+      "row_index": 3
+    },
+    {
+      "key": "color",
+      "lang": "en",
+      "translated": "You got a <color=#FFD700>Legendary</color> piece of gear.",
+      "old_translation": "",
+      "original_ko": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "reason": "컬러 태그가 동일하고 ‘전설’이 Legendary로 자연스럽게 전달됨.",
+      "row_index": 4
+    },
+    {
+      "key": "bold",
+      "lang": "en",
+      "translated": "<b>Heads-up</b>: this action can't be undone.",
+      "old_translation": "",
+      "original_ko": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "reason": "<b> 태그가 유지되었고 주의 문구가 캐주얼한 Heads-up로 잘 맞음.",
+      "row_index": 5
+    },
+    {
+      "key": "printf",
+      "lang": "en",
+      "translated": "Challenge #%d: %s",
+      "old_translation": "",
+      "original_ko": "%d번째 도전: %s",
+      "reason": "%d, %s가 보존되었고 도전 회차 의미가 자연스러움.",
+      "row_index": 6
+    },
+    {
+      "key": "grade",
+      "lang": "en",
+      "translated": "Mythic",
+      "old_translation": "",
+      "original_ko": "신화",
+      "reason": "등급명 ‘신화’가 게임에서 흔한 Mythic으로 적절히 대응됨.",
+      "row_index": 7
+    },
+    {
+      "key": "number",
+      "lang": "en",
+      "translated": "{exp}/{max} until next level",
+      "old_translation": "",
+      "original_ko": "다음 레벨까지 {exp}/{max}",
+      "reason": "{exp}/{max}가 유지되었고 다음 레벨까지 의미가 자연스러움.",
+      "row_index": 8
+    },
+    {
+      "key": "unchanged",
+      "lang": "en",
+      "translated": "Server's under maintenance.",
+      "old_translation": "",
+      "original_ko": "서버 점검 중입니다.",
+      "reason": "서버 점검 안내가 캐주얼한 영어 표현으로 정확히 전달됨.",
+      "row_index": 9
+    },
+    {
+      "key": "duplicate",
+      "lang": "ja",
+      "translated": "体力が{hp}ぶん回復したよ。",
+      "old_translation": "",
+      "original_ko": "체력이 {hp}만큼 회복 됨니다.",
+      "reason": "태그·캐주얼 톤은 유지되나 시제가 원문과 달라 의미가 어긋남. | 경고: 원문은 현재형(회복 됨니다)인데 번역은 과거형(回復したよ)으로 시제가 다름",
+      "row_index": 0
+    },
+    {
+      "key": "duplicate",
+      "lang": "ja",
+      "translated": "マナが{mp}ぶん回復するよ。",
+      "old_translation": "",
+      "original_ko": "마나가 {mp}만큼 회복됩니다.",
+      "reason": "태그·의미·캐주얼 톤이 모두 자연스럽게 맞음.",
+      "row_index": 1
+    },
+    {
+      "key": "newline",
+      "lang": "ja",
+      "translated": "報酬を受け取ってね。\\n次の冒険を始めよう。",
+      "old_translation": "",
+      "original_ko": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "reason": "줄바꿈 태그와 의미가 유지되고 유머러스한 캐주얼 톤이 적절함.",
+      "row_index": 2
+    },
+    {
+      "key": "tab",
+      "lang": "ja",
+      "translated": "名前\\tスコア",
+      "old_translation": "",
+      "original_ko": "이름\\t점수",
+      "reason": "탭 태그가 보존되고 짧은 UI 문구로 자연스러움.",
+      "row_index": 3
+    },
+    {
+      "key": "color",
+      "lang": "ja",
+      "translated": "<color=#FFD700>伝説</color>装備をゲットしたよ。",
+      "old_translation": "",
+      "original_ko": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "reason": "컬러 태그와 용어집(伝説)을 지키며 캐주얼한 획득 표현이 잘 맞음.",
+      "row_index": 4
+    },
+    {
+      "key": "bold",
+      "lang": "ja",
+      "translated": "<b>注意</b>：この行動は取り消せないよ。",
+      "old_translation": "",
+      "original_ko": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "reason": "볼드 태그와 경고 의미가 정확하고 말투도 캐주얼함.",
+      "row_index": 5
+    },
+    {
+      "key": "printf",
+      "lang": "ja",
+      "translated": "%d回目の挑戦：%s",
+      "old_translation": "",
+      "original_ko": "%d번째 도전: %s",
+      "reason": "서식 지정자와 의미가 정확하며 자연스러운 일본어임.",
+      "row_index": 6
+    },
+    {
+      "key": "grade",
+      "lang": "ja",
+      "translated": "神話",
+      "old_translation": "",
+      "original_ko": "신화",
+      "reason": "용어집 매핑(신화→神話)과 일치함.",
+      "row_index": 7
+    },
+    {
+      "key": "number",
+      "lang": "ja",
+      "translated": "次のレベルまで {exp}/{max}",
+      "old_translation": "",
+      "original_ko": "다음 레벨까지 {exp}/{max}",
+      "reason": "변수 태그와 진행 안내 의미가 정확하고 자연스러움.",
+      "row_index": 8
+    },
+    {
+      "key": "unchanged",
+      "lang": "ja",
+      "translated": "サーバーメンテナンス中だよ。",
+      "old_translation": "",
+      "original_ko": "서버 점검 중입니다.",
+      "reason": "점검 안내 의미가 맞고 캐주얼 톤이 잘 유지됨.",
+      "row_index": 9
+    },
+    {
+      "key": "duplicate",
+      "lang": "zh-CN",
+      "translated": "体力恢复了{hp}点。",
+      "old_translation": "",
+      "original_ko": "체력이 {hp}만큼 회복 됨니다.",
+      "reason": "태그 보존과 의미가 맞고, 회복 안내로 자연스러운 간체 표현입니다.",
+      "row_index": 0
+    },
+    {
+      "key": "duplicate",
+      "lang": "zh-CN",
+      "translated": "魔力恢复了{mp}点。",
+      "old_translation": "",
+      "original_ko": "마나가 {mp}만큼 회복됩니다.",
+      "reason": "{mp} 태그가 유지되었고 마나 회복 의미가 캐주얼하게 잘 전달됩니다.",
+      "row_index": 1
+    },
+    {
+      "key": "newline",
+      "lang": "zh-CN",
+      "translated": "来领奖励吧。\\n开启下一段冒险。",
+      "old_translation": "",
+      "original_ko": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "reason": "줄바꿈 태그가 그대로이며, 보상·모험 안내의 유머러스한 톤이 자연스럽습니다.",
+      "row_index": 2
+    },
+    {
+      "key": "tab",
+      "lang": "zh-CN",
+      "translated": "名字\\t分数",
+      "old_translation": "",
+      "original_ko": "이름\\t점수",
+      "reason": "탭 구분자가 보존되었고 표 헤더로 간결하고 정확합니다.",
+      "row_index": 3
+    },
+    {
+      "key": "color",
+      "lang": "zh-CN",
+      "translated": "获得了<color=#FFD700>传说</color>装备。",
+      "old_translation": "",
+      "original_ko": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "reason": "컬러 태그와 전설 등급 의미가 유지된 자연스러운 획득 문구입니다.",
+      "row_index": 4
+    },
+    {
+      "key": "bold",
+      "lang": "zh-CN",
+      "translated": "<b>注意</b>：这个操作可没法反悔哦。",
+      "old_translation": "",
+      "original_ko": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "reason": "볼드 태그가 있고, 되돌릴 수 없음이 캐주얼한 경고 톤으로 잘 살아 있습니다.",
+      "row_index": 5
+    },
+    {
+      "key": "printf",
+      "lang": "zh-CN",
+      "translated": "第%d次挑战：%s",
+      "old_translation": "",
+      "original_ko": "%d번째 도전: %s",
+      "reason": "%d/%s 포맷이 보존되었고 도전 횟수 표현이 자연스럽습니다.",
+      "row_index": 6
+    },
+    {
+      "key": "grade",
+      "lang": "zh-CN",
+      "translated": "神话",
+      "old_translation": "",
+      "original_ko": "신화",
+      "reason": "등급명 ‘신화’가 간체 관용 표현으로 일관되게 번역되었습니다.",
+      "row_index": 7
+    },
+    {
+      "key": "number",
+      "lang": "zh-CN",
+      "translated": "距下一级还有 {exp}/{max}",
+      "old_translation": "",
+      "original_ko": "다음 레벨까지 {exp}/{max}",
+      "reason": "태그는 있으나 ‘还有’ 때문에 경험치 진행 표시가 잔여량으로 오해될 수 있습니다. | 경고: 원문은 다음 레벨까지의 진행도({exp}/{max}) 표시인데, ‘还有’는 남은 양처럼 들려 의미가 어긋남",
+      "row_index": 8
+    },
+    {
+      "key": "unchanged",
+      "lang": "zh-CN",
+      "translated": "服务器正在维护中。",
+      "old_translation": "",
+      "original_ko": "서버 점검 중입니다.",
+      "reason": "서버 점검 안내가 간체 시스템 문구로 정확하고 무난합니다.",
+      "row_index": 9
+    },
+    {
+      "key": "duplicate",
+      "lang": "zh-TW",
+      "translated": "體力恢復了 {hp} 點。",
+      "old_translation": "",
+      "original_ko": "체력이 {hp}만큼 회복 됨니다.",
+      "reason": "태그 {hp}가 유지되고 체력 회복 의미가 자연스럽게 전달됨.",
+      "row_index": 0
+    },
+    {
+      "key": "duplicate",
+      "lang": "zh-TW",
+      "translated": "魔力恢復了 {mp} 點。",
+      "old_translation": "",
+      "original_ko": "마나가 {mp}만큼 회복됩니다.",
+      "reason": "태그 {mp}가 유지되고 마나 회복 의미가 정확하고 자연스러움.",
+      "row_index": 1
+    },
+    {
+      "key": "newline",
+      "lang": "zh-TW",
+      "translated": "來領取獎勵吧。\\n開始下一段冒險吧。",
+      "old_translation": "",
+      "original_ko": "보상을 받으세요.\\n다음 모험을 시작하세요.",
+      "reason": "\\n이 보존되었고 캐주얼한 권유형으로 의미가 잘 전달됨.",
+      "row_index": 2
+    },
+    {
+      "key": "tab",
+      "lang": "zh-TW",
+      "translated": "名稱\\t分數",
+      "old_translation": "",
+      "original_ko": "이름\\t점수",
+      "reason": "\\t가 그대로 유지되고 이름/점수 대응이 정확함.",
+      "row_index": 3
+    },
+    {
+      "key": "color",
+      "lang": "zh-TW",
+      "translated": "獲得了<color=#FFD700>傳說</color>裝備。",
+      "old_translation": "",
+      "original_ko": "<color=#FFD700>전설</color> 장비를 획득했습니다.",
+      "reason": "컬러 태그가 동일하고 전설 장비 획득 의미가 자연스러움.",
+      "row_index": 4
+    },
+    {
+      "key": "bold",
+      "lang": "zh-TW",
+      "translated": "<b>注意</b>：這個動作無法復原喔。",
+      "old_translation": "",
+      "original_ko": "<b>주의</b>: 이 행동은 되돌릴 수 없습니다.",
+      "reason": "<b> 태그가 유지되고 되돌릴 수 없음이 캐주얼하게 전달됨.",
+      "row_index": 5
+    },
+    {
+      "key": "printf",
+      "lang": "zh-TW",
+      "translated": "第 %d 次挑戰：%s",
+      "old_translation": "",
+      "original_ko": "%d번째 도전: %s",
+      "reason": "%d와 %s가 보존되고 도전 횟수 표현이 자연스러움.",
+      "row_index": 6
+    },
+    {
+      "key": "grade",
+      "lang": "zh-TW",
+      "translated": "神話",
+      "old_translation": "",
+      "original_ko": "신화",
+      "reason": "등급명 ‘신화’가 번체로 일관되고 의미가 맞음.",
+      "row_index": 7
+    },
+    {
+      "key": "number",
+      "lang": "zh-TW",
+      "translated": "距離下一級 {exp}/{max}",
+      "old_translation": "",
+      "original_ko": "다음 레벨까지 {exp}/{max}",
+      "reason": "{exp}/{max}가 유지되고 다음 레벨까지 진행 의미가 정확함.",
+      "row_index": 8
+    },
+    {
+      "key": "unchanged",
+      "lang": "zh-TW",
+      "translated": "伺服器維護中。",
+      "old_translation": "",
+      "original_ko": "서버 점검 중입니다.",
+      "reason": "서버 점검 안내가 간결하고 자연스러운 번체로 전달됨.",
+      "row_index": 9
+    }
+  ],
+  "failed_rows": [],
+  "pipeline_logs": [
+    "[Node 1] 데이터 로드 완료: 10행",
+    "[Node 1] 백업 생성 완료: 10행",
+    "[Node 2] 컨텍스트 셋업 — 타겟 언어: ['en', 'ja', 'zh-CN', 'zh-TW']",
+    "[Node 2] 게임 시놉시스 로드 완료",
+    "[Node 2] 톤앤매너: ",
+    "[Node 2] EN Glossary 로드: 2개 항목",
+    "[Node 2] JA Glossary 로드: 8개 항목",
+    "[Node 2] ZH-CN Glossary 없음 (AI 자유 번역)",
+    "[Node 2] ZH-TW Glossary 없음 (AI 자유 번역)",
+    "[한국어 검수] 캐시 결과 사용: 10행 (스킵)",
+    "[한국어 검수] 사용자 결정: approved",
+    "[Node 3] EN 번역 대상: 10행 (1청크)",
+    "[Node 3] JA 번역 대상: 10행 (1청크)",
+    "[Node 3] ZH-CN 번역 대상: 10행 (1청크)",
+    "[Node 3] ZH-TW 번역 대상: 10행 (1청크)",
+    "[Node 3] EN 청크 1/1 완료 (10/10 성공)",
+    "[Node 3] JA 청크 1/1 완료 (10/10 성공)",
+    "[Node 3] ZH-CN 청크 1/1 완료 (10/10 성공)",
+    "[Node 3] ZH-TW 청크 1/1 완료 (10/10 성공)",
+    "[Node 4] 정규식/Glossary 검증: 통과 40건, 재시도 0건",
+    "[Node 4] EN 검수 청크 1/1 완료 (10건)",
+    "[Node 4] AI 검수 경고 — duplicate (ja): 원문은 현재형(회복 됨니다)인데 번역은 과거형(回復したよ)으로 시제가 다름",
+    "[Node 4] JA 검수 청크 1/1 완료 (10건)",
+    "[Node 4] AI 검수 경고 — number (zh-CN): 원문은 다음 레벨까지의 진행도({exp}/{max}) 표시인데, ‘还有’는 남은 양처럼 들려 의미가 어긋남",
+    "[Node 4] ZH-CN 검수 청크 1/1 완료 (10건)",
+    "[Node 4] ZH-TW 검수 청크 1/1 완료 (10건)",
+    "[Node 4] 검수 완료: 누적 통과 40건, 실패 0건, 재시도 대기 0건"
+  ],
+  "prepared_cells": [
+    {
+      "row": 10,
+      "column": 5,
+      "value": "MP restored by {mp}."
+    },
+    {
+      "row": 11,
+      "column": 5,
+      "value": "Grab your rewards.\\nStart your next adventure."
+    },
+    {
+      "row": 12,
+      "column": 5,
+      "value": "Name\\tScore"
+    },
+    {
+      "row": 13,
+      "column": 5,
+      "value": "You got a <color=#FFD700>Legendary</color> piece of gear."
+    },
+    {
+      "row": 14,
+      "column": 5,
+      "value": "<b>Heads-up</b>: this action can't be undone."
+    },
+    {
+      "row": 15,
+      "column": 5,
+      "value": "Challenge #%d: %s"
+    },
+    {
+      "row": 16,
+      "column": 5,
+      "value": "Mythic"
+    },
+    {
+      "row": 17,
+      "column": 5,
+      "value": "{exp}/{max} until next level"
+    },
+    {
+      "row": 18,
+      "column": 5,
+      "value": "Server's under maintenance."
+    },
+    {
+      "row": 9,
+      "column": 6,
+      "value": "体力が{hp}ぶん回復したよ。"
+    },
+    {
+      "row": 10,
+      "column": 6,
+      "value": "マナが{mp}ぶん回復するよ。"
+    },
+    {
+      "row": 11,
+      "column": 6,
+      "value": "報酬を受け取ってね。\\n次の冒険を始めよう。"
+    },
+    {
+      "row": 12,
+      "column": 6,
+      "value": "名前\\tスコア"
+    },
+    {
+      "row": 13,
+      "column": 6,
+      "value": "<color=#FFD700>伝説</color>装備をゲットしたよ。"
+    },
+    {
+      "row": 14,
+      "column": 6,
+      "value": "<b>注意</b>：この行動は取り消せないよ。"
+    },
+    {
+      "row": 15,
+      "column": 6,
+      "value": "%d回目の挑戦：%s"
+    },
+    {
+      "row": 16,
+      "column": 6,
+      "value": "神話"
+    },
+    {
+      "row": 17,
+      "column": 6,
+      "value": "次のレベルまで {exp}/{max}"
+    },
+    {
+      "row": 18,
+      "column": 6,
+      "value": "サーバーメンテナンス中だよ。"
+    },
+    {
+      "row": 9,
+      "column": 7,
+      "value": "体力恢复了{hp}点。"
+    },
+    {
+      "row": 10,
+      "column": 7,
+      "value": "魔力恢复了{mp}点。"
+    },
+    {
+      "row": 11,
+      "column": 7,
+      "value": "来领奖励吧。\\n开启下一段冒险。"
+    },
+    {
+      "row": 12,
+      "column": 7,
+      "value": "名字\\t分数"
+    },
+    {
+      "row": 13,
+      "column": 7,
+      "value": "获得了<color=#FFD700>传说</color>装备。"
+    },
+    {
+      "row": 14,
+      "column": 7,
+      "value": "<b>注意</b>：这个操作可没法反悔哦。"
+    },
+    {
+      "row": 15,
+      "column": 7,
+      "value": "第%d次挑战：%s"
+    },
+    {
+      "row": 16,
+      "column": 7,
+      "value": "神话"
+    },
+    {
+      "row": 17,
+      "column": 7,
+      "value": "距下一级还有 {exp}/{max}"
+    },
+    {
+      "row": 18,
+      "column": 7,
+      "value": "服务器正在维护中。"
+    },
+    {
+      "row": 9,
+      "column": 8,
+      "value": "體力恢復了 {hp} 點。"
+    },
+    {
+      "row": 10,
+      "column": 8,
+      "value": "魔力恢復了 {mp} 點。"
+    },
+    {
+      "row": 11,
+      "column": 8,
+      "value": "來領取獎勵吧。\\n開始下一段冒險吧。"
+    },
+    {
+      "row": 12,
+      "column": 8,
+      "value": "名稱\\t分數"
+    },
+    {
+      "row": 13,
+      "column": 8,
+      "value": "獲得了<color=#FFD700>傳說</color>裝備。"
+    },
+    {
+      "row": 14,
+      "column": 8,
+      "value": "<b>注意</b>：這個動作無法復原喔。"
+    },
+    {
+      "row": 15,
+      "column": 8,
+      "value": "第 %d 次挑戰：%s"
+    },
+    {
+      "row": 16,
+      "column": 8,
+      "value": "神話"
+    },
+    {
+      "row": 17,
+      "column": 8,
+      "value": "距離下一級 {exp}/{max}"
+    },
+    {
+      "row": 18,
+      "column": 8,
+      "value": "伺服器維護中。"
+    },
+    {
+      "row": 10,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 11,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 12,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 13,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 14,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 15,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 16,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 17,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 18,
+      "column": 4,
+      "value": "최종완료"
+    },
+    {
+      "row": 9,
+      "column": 4,
+      "value": "최종완료"
+    }
+  ],
+  "passed": true,
+  "cost": {
+    "input_tokens": 15906,
+    "output_tokens": 8430,
+    "reasoning_tokens": 2678,
+    "cached_tokens": 5888,
+    "estimated_cost_usd": 0.0896
+  },
+  "elapsed_seconds": 121.85
+}

@@ -117,14 +117,17 @@ export default function App() {
     const savedId = localStorage.getItem("devlocal_session_id");
     if (!savedId) return;
 
+    let active = true;
     // 5초 타임아웃 — 백엔드 무응답 시 idle로 복귀
     const timeout = setTimeout(() => {
+      active = false;
       localStorage.removeItem("devlocal_session_id");
       setRestoring(false);
     }, 5000);
 
     getSessionState(savedId)
       .then((state) => {
+        if (!active) return;
         clearTimeout(timeout);
         const s = useAppStore.getState();
         if (state.current_step === "done" || state.current_step === "idle") {
@@ -154,13 +157,14 @@ export default function App() {
         }
       })
       .catch(() => {
+        if (!active) return;
         clearTimeout(timeout);
         // 세션 만료 또는 서버 미실행 — 정리 후 idle
         localStorage.removeItem("devlocal_session_id");
       })
-      .finally(() => setRestoring(false));
+      .finally(() => { if (active) setRestoring(false); });
 
-    return () => clearTimeout(timeout);
+    return () => { active = false; clearTimeout(timeout); };
   }, [restoring]);
 
   if (restoring) {

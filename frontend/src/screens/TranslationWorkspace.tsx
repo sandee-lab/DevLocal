@@ -4,6 +4,7 @@ import {
   cancelTranslation,
   approveFinal,
   getDownloadUrl,
+  getSessionState,
 } from "../api/client";
 import { useCountUp } from "../hooks/useCountUp";
 import { highlightDiff } from "../utils/diffHighlight";
@@ -232,7 +233,11 @@ export default function TranslationWorkspace() {
     setCancelError(null);
     try {
       await cancelTranslation(sessionId);
+      const state = await getSessionState(sessionId);
       resetTranslationState();
+      useAppStore.getState().setKoReviewResults(state.ko_review_results ?? []);
+      useAppStore.getState().setOriginalRows(state.original_rows ?? []);
+      useAppStore.getState().setTotalRows(state.total_rows ?? 0);
       setCurrentStep("ko_review");
     } catch (e) {
       setCancelError(
@@ -247,33 +252,18 @@ export default function TranslationWorkspace() {
     if (!sessionId) return;
     setSubmitError(null);
 
-    if (decision === "approved") {
-      // Optimistic UI: 즉시 DoneScreen으로 전환, 시트 쓰기는 백그라운드
-      setIsWritingToSheet(true);
+    setSubmitting(true);
+    setIsWritingToSheet(decision === "approved");
+    try {
+      const res = await approveFinal(sessionId, { decision, decisions: reviewDecisions });
+      setTranslationsApplied(res.translations_applied ?? false);
+      setCellsUpdated(res.updates_count ?? 0);
       setCurrentStep("done");
-      approveFinal(sessionId, { decision })
-        .then((res) => {
-          setTranslationsApplied(res.translations_applied ?? false);
-          setCellsUpdated(res.updates_count ?? 0);
-        })
-        .catch(() => {
-          // DoneScreen에서 에러 상태 표시 (isWritingToSheet 유지하지 않음)
-          setTranslationsApplied(false);
-        })
-        .finally(() => setIsWritingToSheet(false));
-    } else {
-      // Rejected — 시트 쓰기 없으므로 빠름, 동기 처리
-      setSubmitting(true);
-      try {
-        await approveFinal(sessionId, { decision });
-        setCurrentStep("done");
-      } catch (e) {
-        setSubmitError(
-          `Final approval failed: ${e instanceof Error ? e.message : "Unknown error"}`,
-        );
-      } finally {
-        setSubmitting(false);
-      }
+    } catch (e) {
+      setSubmitError(`Final approval failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    } finally {
+      setIsWritingToSheet(false);
+      setSubmitting(false);
     }
   }
 
@@ -308,7 +298,7 @@ export default function TranslationWorkspace() {
   function doApproveWithAutoAccept() {
     // 미확인 항목을 모두 accepted로 설정
     for (const r of reviewResults) {
-      const dk = `${r.key}_${r.lang}`;
+      const dk = r.row_index != null ? `${r.row_index}_${r.lang}` : `${r.key}_${r.lang}`;
       if (!reviewDecisions[dk]) setReviewDecision(dk, "accepted");
     }
     handleFinalApproval("approved");

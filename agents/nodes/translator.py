@@ -1,6 +1,5 @@
 """Node 3: 번역 (LLM) — 청크 단위 번역, Shared Comments 컨텍스트 주입"""
 
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_core.runnables import RunnableConfig
@@ -14,7 +13,8 @@ from config.constants import (
     SUPPORTED_LANGUAGES,
 )
 from utils.drip_feed import drip_feed_emit, emit_log_line, emit_log_lines
-from utils.llm import llm_chunk_with_completeness, split_warmup_tasks
+from utils.llm import llm_chunk_with_completeness, split_warmup_tasks, raise_if_cancelled
+from utils.rows import reviewed_source_rows
 from config.glossary import format_glossary_text
 
 
@@ -72,7 +72,7 @@ def _normalize_translated(text: str) -> str:
     return text.replace("\n", "\\n").replace("\t", "\\t")
 
 
-def _translate_retry(state: LocalizationState, needs_retry: list[dict], emitter=None, conv_id: str | None = None) -> dict:
+def _translate_retry(state: LocalizationState, needs_retry: list[dict], emitter=None, conv_id: str | None = None, config=None) -> dict:
     """재시도 모드: 실패한 항목만 재번역 (병렬 청크 처리)"""
     retry_count = dict(state.get("retry_count", {}))
     logs = list(state.get("logs", []))
@@ -109,9 +109,9 @@ def _translate_retry(state: LocalizationState, needs_retry: list[dict], emitter=
             tasks.append((lang, chunk_idx, total_chunks, items[start:end], system_prompt))
 
     all_results: list[dict] = []
-    lock = threading.Lock()
 
     def _process(lang: str, chunk_idx: int, total_chunks: int, chunk: list[dict], system_prompt: str):
+        raise_if_cancelled(config)
         _emit_heartbeat(emitter, "translator_retry", lang, chunk_idx + 1, total_chunks, len(chunk))
         try:
             pairs, missing, usage = llm_chunk_with_completeness(
@@ -179,8 +179,7 @@ def _translate_retry(state: LocalizationState, needs_retry: list[dict], emitter=
             with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
                 futures = [exe.submit(_process, *t) for t in rest_tasks]
                 for fut in as_completed(futures):
-                    with lock:
-                        _handle_retry_result(fut.result())
+                    _handle_retry_result(fut.result())
 
     return {
         "translation_results": all_results,
@@ -209,14 +208,11 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
     # 재시도 모드 확인
     needs_retry = state.get("_needs_retry", [])
     if needs_retry:
-        return _translate_retry(state, needs_retry, emitter=emitter, conv_id=conv_id)
+        return _translate_retry(state, needs_retry, emitter=emitter, conv_id=conv_id, config=config)
 
     # ── 정상 번역 모드 ──
-    original_data = state.get("original_data", [])
     mode = state.get("mode", "A")
     target_languages = state.get("target_languages", [])
-    ko_approval_result = state.get("ko_approval_result", "approved")
-    ko_review_results = state.get("ko_review_results", [])
     retry_count = dict(state.get("retry_count", {}))
     logs = list(state.get("logs", []))
     total_input_tokens = state.get("total_input_tokens", 0)
@@ -227,26 +223,13 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
     game_synopsis = state.get("game_synopsis", "")
     tone_and_manner = state.get("tone_and_manner", "")
 
-    # 한국어 검수 승인 시, 수정된 텍스트 적용
-    working_data = []
-    ko_revised_map = {}
-    if ko_approval_result == "approved" and ko_review_results:
-        for r in ko_review_results:
-            ko_revised_map[r["key"]] = r["revised"]
-
-    for row in original_data:
-        row_copy = dict(row)
-        key = row_copy.get(REQUIRED_COLUMNS["key"], "")
-        if key in ko_revised_map:
-            row_copy[REQUIRED_COLUMNS["korean"]] = ko_revised_map[key]
-        working_data.append(row_copy)
+    working_data = reviewed_source_rows(state)
 
     api_key = get_xai_api_key()
 
     # 언어별 target 행 필터링 + 작업 평탄화
     tasks: list[tuple] = []  # (lang, chunk_idx, total_chunks, chunk, system_prompt)
     target_rows_total = 0
-    last_total_chunks = 0  # state 반환값 호환용
 
     for lang in target_languages:
         lang_col = SUPPORTED_LANGUAGES.get(lang, "")
@@ -275,7 +258,6 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
             synopsis=game_synopsis, tone=tone_and_manner, custom_prompt=custom_prompt,
         )
         total_chunks = (len(target_rows) + CHUNK_SIZE - 1) // CHUNK_SIZE
-        last_total_chunks = total_chunks
         line = f"[Node 3] {lang.upper()} 번역 대상: {len(target_rows)}행 ({total_chunks}청크)"
         logs.append(line)
         emit_log_line(emitter, line)
@@ -288,8 +270,6 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
     if not tasks:
         return {
             "translation_results": [],
-            "current_chunk_index": 0,
-            "total_chunks": 0,
             "total_input_tokens": total_input_tokens,
             "total_output_tokens": total_output_tokens,
             "total_reasoning_tokens": total_reasoning_tokens,
@@ -299,11 +279,11 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
         }
 
     all_results: list[dict] = []
-    lock = threading.Lock()
     cumulative_done = 0
     progress_total = max(target_rows_total, 1)
 
     def _process(lang: str, chunk_idx: int, total_chunks: int, chunk: list[dict], system_prompt: str):
+        raise_if_cancelled(config)
         _emit_heartbeat(emitter, "translator", lang, chunk_idx + 1, total_chunks, len(chunk))
         local_logs: list[str] = []
         try:
@@ -388,13 +368,10 @@ def translator_node(state: LocalizationState, config: RunnableConfig) -> dict:
         with ThreadPoolExecutor(max_workers=LLM_CHUNK_PARALLELISM) as exe:
             futures = [exe.submit(_process, *t) for t in rest_tasks]
             for fut in as_completed(futures):
-                with lock:
-                    _handle_translate_result(fut.result())
+                _handle_translate_result(fut.result())
 
     return {
         "translation_results": all_results,
-        "current_chunk_index": last_total_chunks,
-        "total_chunks": last_total_chunks,
         "total_input_tokens": total_input_tokens,
         "total_output_tokens": total_output_tokens,
         "total_reasoning_tokens": total_reasoning_tokens,

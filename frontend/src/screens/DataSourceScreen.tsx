@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAppStore } from "../store/useAppStore";
 import { useToastStore } from "../store/toastStore";
 import { connectSheet, startPipeline, getConfig, saveConfig } from "../api/client";
@@ -14,7 +14,6 @@ export default function DataSourceScreen() {
   const selectedSheet = useAppStore((s) => s.selectedSheet);
   const setSelectedSheet = useAppStore((s) => s.setSelectedSheet);
   const mode = useAppStore((s) => s.mode);
-  const setRowLimit = useAppStore((s) => s.setRowLimit);
   const setSessionId = useAppStore((s) => s.setSessionId);
   const setCurrentStep = useAppStore((s) => s.setCurrentStep);
   const projectName = useAppStore((s) => s.projectName);
@@ -34,9 +33,9 @@ export default function DataSourceScreen() {
   const [urlEditing, setUrlEditing] = useState(true);
 
   // 저장된 URL로 자동 연결하는 헬퍼
-  async function autoConnect(url: string) {
+  const autoConnect = useCallback(async (url: string) => {
     const urlErr = validateSheetUrl(url);
-    if (urlErr) return;
+    if (urlErr) { setUrlError(urlErr); return; }
     setConnecting(true);
     setError("");
     setUrlError(null);
@@ -59,13 +58,15 @@ export default function DataSourceScreen() {
     } finally {
       setConnecting(false);
     }
-  }
+  }, [setSheetNames, setBotEmail, setProjectName, setSelectedSheet]);
 
   // Load saved config on mount — 저장된 URL 있으면 자동 연결
   useEffect(() => {
+    let active = true;
     getConfig()
       .then((cfg) => {
-        if (cfg.saved_url && !sheetUrl) {
+        if (!active) return;
+        if (cfg.saved_url && !useAppStore.getState().sheetUrl) {
           setSheetUrl(cfg.saved_url);
           // 저장된 URL로 즉시 자동 연결
           autoConnect(cfg.saved_url);
@@ -81,37 +82,11 @@ export default function DataSourceScreen() {
         }
       })
       .catch(() => {});
-  }, []);
+    return () => { active = false; };
+  }, [autoConnect, setSheetUrl, setSelectedSheet, setBotEmail]);
 
-  async function handleConnect() {
-    if (!sheetUrl.trim()) return;
-    const urlErr = validateSheetUrl(sheetUrl);
-    if (urlErr) {
-      setUrlError(urlErr);
-      return;
-    }
-    setConnecting(true);
-    setError("");
-    setUrlError(null);
-    try {
-      const res = await connectSheet({ sheet_url: sheetUrl });
-      setSheetNames(res.sheet_names);
-      setBotEmail(res.bot_email);
-      if (res.project_name) setProjectName(res.project_name);
-      if (res.sheet_names.length > 0) {
-        // 이전 선택 탭이 있고 목록에 포함되면 유지, 아니면 첫 번째 선택
-        if (!selectedSheet || !res.sheet_names.includes(selectedSheet)) {
-          setSelectedSheet(res.sheet_names[0]);
-        }
-        setUrlEditing(false);
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Connection failed";
-      setError(msg);
-      useToastStore.getState().addToast(msg);
-    } finally {
-      setConnecting(false);
-    }
+  function handleConnect() {
+    return autoConnect(sheetUrl);
   }
 
   async function handleLoad() {
@@ -427,7 +402,6 @@ export default function DataSourceScreen() {
                         onChange={(e) => {
                           const v = Number(e.target.value);
                           setRowEnd(v);
-                          setRowLimit(v > 0 ? v - rowStart : 0);
                           if (rowRangeError) setRowRangeError(null);
                         }}
                         onKeyDown={(e) => {

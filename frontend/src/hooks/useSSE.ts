@@ -26,15 +26,22 @@ const MAX_DELAY_MS = 16000;
 export function useSSE() {
   const sessionId = useAppStore((s) => s.sessionId);
   const esRef = useRef<EventSource | null>(null);
-  const reconnectCountRef = useRef(0);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const closedIntentionallyRef = useRef(false);
-
   useEffect(() => {
     if (!sessionId) return;
+    let closedIntentionally = false;
+    let reconnectCount = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let transitionTimer: ReturnType<typeof setTimeout> | undefined;
 
-    closedIntentionallyRef.current = false;
-    reconnectCountRef.current = 0;
+    function transition(step: AppStep, expected: AppStep, delay: number) {
+      clearTimeout(transitionTimer);
+      transitionTimer = setTimeout(() => {
+        const state = useAppStore.getState();
+        if (!closedIntentionally && state.sessionId === sessionId && state.currentStep === expected) {
+          state.setCurrentStep(step);
+        }
+      }, delay);
+    }
 
     function connect() {
       const es = new EventSource(`/api/stream/${sessionId}`);
@@ -42,14 +49,15 @@ export function useSSE() {
       const store = useAppStore.getState;
 
       es.onopen = () => {
-        const wasReconnect = reconnectCountRef.current > 0;
-        reconnectCountRef.current = 0;
+        const wasReconnect = reconnectCount > 0;
+        reconnectCount = 0;
         store().setSseStatus("connected");
 
         // 재연결 시 끊김 동안 놓친 상태 전환 동기화
         if (wasReconnect && sessionId) {
           getSessionState(sessionId)
             .then((state) => {
+              if (closedIntentionally || esRef.current !== es || store().sessionId !== sessionId) return;
               const s = store();
               const cur = s.currentStep;
               // 테이블 복원용 original_rows
@@ -67,7 +75,12 @@ export function useSSE() {
                 if (state.cost_summary) s.setCostSummary(state.cost_summary);
                 s.setCurrentStep("final_review");
               } else if (state.current_step === "done" && cur !== "done") {
+                s.setTranslationsApplied(state.translations_applied ?? false);
+                s.setCellsUpdated(state.updates_count ?? 0);
                 s.setCurrentStep("done");
+                closedIntentionally = true;
+                s.setSseStatus("disconnected");
+                es.close();
               } else if (state.current_step !== cur) {
                 s.setCurrentStep(state.current_step as AppStep);
               }
@@ -94,6 +107,7 @@ export function useSSE() {
           const p = loadingMap[data.node];
           if (p) s.setProgress(p[0], p[1]);
         } else if (data.step === "translating") {
+          if (s.currentStep === "loading" || s.currentStep === "ko_review") s.setCurrentStep("translating");
           // Translating phase — 라벨만 업데이트 (진행률은 chunk 이벤트가 담당)
           const labelMap: Record<string, string> = {
             translator: "Translator Agent working...",
@@ -118,6 +132,7 @@ export function useSSE() {
       es.addEventListener("original_data", (e) => {
         const data = JSON.parse(e.data);
         store().setOriginalRows(data.rows);
+        store().setTotalRows(data.rows.length);
       });
 
       /* ── 노드 하트비트 (stall 감지) ── */
@@ -183,14 +198,20 @@ export function useSSE() {
         );
       });
 
-      /* ── 한국어 검수 완료 → 항상 리뷰 화면 표시 (0건이어도 컨펌 필요) ── */
+      /* ── 한국어 검수 완료 ── */
       es.addEventListener("ko_review_ready", (e) => {
         const data: KoReviewReadyData = JSON.parse(e.data);
         const s = store();
+        const cancelledRemotely = s.currentStep === "translating" || s.currentStep === "final_review";
+        if (cancelledRemotely) {
+          clearTimeout(transitionTimer);
+          s.resetTranslationState();
+        }
         s.setKoReviewResults(data.results);
         s.setTotalRows(data.count);
         s.setProgress(100, "Korean review complete");
-        setTimeout(() => s.setCurrentStep("ko_review"), 1500);
+        if (cancelledRemotely) s.setCurrentStep("ko_review");
+        else transition("ko_review", "loading", 1500);
       });
 
       /* ── 번역 검수 완료 → 600ms dwell 후 화면 전환 ── */
@@ -210,14 +231,18 @@ export function useSSE() {
           });
         }
         s.setProgress(100, "Translation complete");
-        setTimeout(() => s.setCurrentStep("final_review"), 600);
+        transition("final_review", "translating", 600);
       });
 
       /* ── 완료 — 의도적 종료 ── */
-      es.addEventListener("done", () => {
+      es.addEventListener("done", (e) => {
         // Stale "done" 이벤트 무시 (구 세션에서 늦게 도착한 경우)
         if (useAppStore.getState().sessionId !== sessionId) return;
-        closedIntentionallyRef.current = true;
+        const data = JSON.parse(e.data);
+        store().setTranslationsApplied(data.translations_applied ?? false);
+        store().setCellsUpdated(data.updates_count ?? 0);
+        closedIntentionally = true;
+        clearTimeout(transitionTimer);
         store().setCurrentStep("done");
         store().setSseStatus("disconnected");
         es.close();
@@ -232,46 +257,46 @@ export function useSSE() {
           } catch {
             // non-JSON error event
           }
-          closedIntentionallyRef.current = true;
+          closedIntentionally = true;
           store().setSseStatus("disconnected");
           es.close();
           // All Sheets 모드: 에러 발생해도 큐 진행 (다음 시트로 이동)
-          if (useAppStore.getState().allSheetsMode) {
-            store().setCurrentStep("done");
-          }
+          clearTimeout(transitionTimer);
+          store().setCurrentStep(store().allSheetsMode ? "done" : "idle");
+          store().setSessionId(null);
         }
       });
 
       /* ── 연결 끊김 (네트워크 에러) → 재연결 시도 ── */
-      es.onerror = () => {
-        if (closedIntentionallyRef.current) return;
-        if (es.readyState === EventSource.CLOSED) {
-          es.close();
-          esRef.current = null;
-          attemptReconnect();
-        }
+      es.onerror = (event) => {
+        if (closedIntentionally || event instanceof MessageEvent) return;
+        // 브라우저 기본 재연결을 닫고 한 곳에서 재시도·상태 복원을 관리한다.
+        es.close();
+        esRef.current = null;
+        attemptReconnect();
       };
     }
 
     function attemptReconnect() {
-      if (reconnectCountRef.current >= MAX_RECONNECT) {
+      if (reconnectCount >= MAX_RECONNECT) {
         useAppStore.getState().setSseStatus("disconnected");
         return;
       }
       useAppStore.getState().setSseStatus("reconnecting");
       const delay = Math.min(
-        BASE_DELAY_MS * 2 ** reconnectCountRef.current,
+        BASE_DELAY_MS * 2 ** reconnectCount,
         MAX_DELAY_MS,
       );
-      reconnectCountRef.current++;
-      reconnectTimerRef.current = setTimeout(() => connect(), delay);
+      reconnectCount++;
+      reconnectTimer = setTimeout(() => connect(), delay);
     }
 
     connect();
 
     return () => {
-      closedIntentionallyRef.current = true;
-      clearTimeout(reconnectTimerRef.current);
+      closedIntentionally = true;
+      clearTimeout(reconnectTimer);
+      clearTimeout(transitionTimer);
       esRef.current?.close();
       esRef.current = null;
     };

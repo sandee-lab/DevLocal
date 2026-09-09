@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useToastStore } from "../store/toastStore";
 import { useAppStore } from "../store/useAppStore";
 import { getConfig, saveConfig } from "../api/client";
 import { useFocusTrap } from "../hooks/useFocusTrap";
@@ -47,8 +48,10 @@ export default function SettingsModal() {
       setLoaded(false);
       return;
     }
+    let active = true;
     getConfig()
       .then((cfg) => {
+        if (!active) return;
         const g = cfg.glossary ?? {};
         const p = cfg.custom_prompts ?? {};
         setLocalGlossary(g);
@@ -56,18 +59,18 @@ export default function SettingsModal() {
         setCustomPrompts(p);
         setSynopsisText(cfg.game_synopsis ?? "");
         setToneText(cfg.tone_and_manner ?? "");
-        setPromptText(selectedSheet ? p[selectedSheet] ?? "" : "");
         setLoaded(true);
       })
-      .catch(() => setLoaded(true));
-  }, [open]);
+      .catch(() => { if (active) setLoaded(true); });
+    return () => { active = false; };
+  }, [open, setGlossary, setCustomPrompts]);
 
   // Update prompt text when sheet changes while modal is open
   useEffect(() => {
     if (open && loaded) {
       setPromptText(selectedSheet ? customPrompts[selectedSheet] ?? "" : "");
     }
-  }, [selectedSheet, open, loaded]);
+  }, [selectedSheet, open, loaded, customPrompts]);
 
   // KO 합집합 기준 통합 행 — 인라인 편집 키 입력마다 재계산하지 않도록 memo
   const rows = useMemo(
@@ -169,14 +172,14 @@ export default function SettingsModal() {
       await saveConfig({
         glossary: localGlossary,
         custom_prompts: updatedPrompts,
-        game_synopsis: synopsisText.trim() || undefined,
-        tone_and_manner: toneText.trim() || undefined,
+        game_synopsis: synopsisText.trim(),
+        tone_and_manner: toneText.trim(),
       });
       setGlossary(localGlossary);
       setCustomPrompts(updatedPrompts);
       setOpen(false);
-    } catch {
-      // silent — config save is non-critical
+    } catch (error) {
+      useToastStore.getState().addToast(error instanceof Error ? error.message : "설정을 저장하지 못했습니다");
     } finally {
       setSaving(false);
     }

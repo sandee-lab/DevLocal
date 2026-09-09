@@ -2,6 +2,7 @@
 
 import json
 import logging
+from concurrent.futures import CancelledError
 from typing import Callable
 
 import litellm
@@ -9,6 +10,13 @@ import litellm
 from config.constants import LLM_MODEL, LLM_REASONING_EFFORT
 
 logger = logging.getLogger("devlocal.llm")
+
+
+def raise_if_cancelled(config):
+    """취소 이후 대기 중인 청크가 새 LLM 요청을 보내지 않게 한다."""
+    cancelled = (config or {}).get("configurable", {}).get("is_cancelled")
+    if cancelled and cancelled():
+        raise CancelledError("취소된 번역 작업")
 
 
 def _norm_key(value) -> str:

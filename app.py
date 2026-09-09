@@ -1,38 +1,12 @@
 """게임 로컬라이징 자동화 툴 — Streamlit 메인 앱"""
 
-import json
 import uuid
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 from langgraph.types import Command
 
-# ── 로컬 설정 파일 (시트 URL 영속 저장) ──────────────────────────────
-_CONFIG_PATH = Path(__file__).parent / ".app_config.json"
-
-
-def _load_config() -> dict:
-    """로컬 설정 파일에서 저장된 값을 읽어온다."""
-    if _CONFIG_PATH.exists():
-        try:
-            return json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
-
-
-def _save_config(data: dict):
-    """로컬 설정 파일에 값을 저장한다."""
-    try:
-        existing = _load_config()
-        existing.update(data)
-        _CONFIG_PATH.write_text(
-            json.dumps(existing, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
+from config.app_config import load_config as _load_config, save_config as _save_config
 
 from agents.graph import build_graph
 from config.constants import (
@@ -452,20 +426,14 @@ if start_button:
             "sheet_name": selected_sheet,
             "mode": mode,
             "target_languages": target_langs,
-            "original_data": df.to_dict("records"),
+            "original_data": [{**row, "_row_index": i} for i, row in enumerate(df.to_dict("records"))],
             "backup_data": df.to_dict("records"),
             "ko_review_results": [],
             "translation_results": [],
             "review_results": [],
             "failed_rows": [],
-            "diff_report_ko": None,
-            "diff_report_translation": None,
-            "wait_for_ko_approval": False,
             "ko_approval_result": None,
-            "wait_for_final_approval": False,
             "final_approval_result": None,
-            "current_chunk_index": 0,
-            "total_chunks": 0,
             "retry_count": {},
             "total_input_tokens": 0,
             "total_output_tokens": 0,

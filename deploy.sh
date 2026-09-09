@@ -17,53 +17,26 @@ if ! command -v gcloud &> /dev/null; then
     exit 1
 fi
 
-# ── 2. .env에서 XAI_API_KEY 읽기 ──
-if [ -f .env ]; then
-    XAI_API_KEY=$(grep -E "^XAI_API_KEY=" .env | cut -d'=' -f2-)
-else
-    echo "❌ .env 파일이 없습니다."
-    exit 1
-fi
-
-if [ -z "$XAI_API_KEY" ]; then
-    echo "❌ .env에 XAI_API_KEY가 설정되지 않았습니다."
-    exit 1
-fi
-
-# ── 3. GCP 서비스 계정 JSON 읽기 ──
-GCP_JSON_PATH=$(grep -E "^GCP_SERVICE_ACCOUNT_JSON_PATH=" .env | cut -d'=' -f2- || true)
-GCP_JSON_PATH="${GCP_JSON_PATH:-.gcp_service_account.json}"
-
-if [ ! -f "$GCP_JSON_PATH" ]; then
-    echo "❌ GCP 서비스 계정 파일이 없습니다: $GCP_JSON_PATH"
-    exit 1
-fi
-
-# JSON을 한 줄로 변환하여 임시 env 파일 생성
-GCP_JSON=$(python3 -c "import sys,json; print(json.dumps(json.load(open('$GCP_JSON_PATH'))))")
-
+# ── 2. 공유 저장소·접근 제어 사전 설정 ──
+# DB/Secret/IAP 사용자 권한은 docs/P1_OPERATIONS.md에 따라 먼저 준비한다.
+: "${DATABASE_SECRET:?DATABASE_URL을 저장한 Secret 이름:버전을 지정하세요}"
+: "${CLOUD_SQL_INSTANCE:?project:region:instance 형식으로 지정하세요}"
+: "${RUNTIME_SERVICE_ACCOUNT:?DB 및 Secret 접근 권한이 있는 서비스 계정을 지정하세요}"
+: "${ADMIN_EMAILS:?설정 관리자의 이메일을 쉼표로 구분하여 지정하세요}"
+export ADMIN_EMAILS
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
+export IAP_AUDIENCE="/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${SERVICE_NAME}"
 ENV_FILE=$(mktemp)
+chmod 600 "$ENV_FILE"
 trap 'rm -f "$ENV_FILE"' EXIT
-
-python3 -c "
-import json, sys
-env = {
-    'XAI_API_KEY': '''${XAI_API_KEY}''',
-    'GCP_SERVICE_ACCOUNT_JSON': json.dumps(json.load(open('$GCP_JSON_PATH')))
-}
-# YAML 형식으로 출력
-for k, v in env.items():
-    print(f'{k}: {json.dumps(v)}')
-" > "$ENV_FILE"
-
-echo "✅ Secrets 로드 완료"
+python3 scripts/deployment_env.py "$ENV_FILE"
 
 # ── 4. GCP 프로젝트 설정 ──
 gcloud config set project "$PROJECT_ID" --quiet
 
 # ── 5. 필요한 API 활성화 ──
 echo "🔧 GCP API 활성화 중..."
-gcloud services enable cloudbuild.googleapis.com run.googleapis.com --quiet
+gcloud services enable cloudbuild.googleapis.com run.googleapis.com iap.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com --quiet
 
 # ── 6. Cloud Build로 이미지 빌드 + Cloud Run 배포 ──
 echo "🚀 빌드 + 배포 시작... (2-5분 소요)"
@@ -71,12 +44,23 @@ gcloud run deploy "$SERVICE_NAME" \
     --source . \
     --region "$REGION" \
     --platform managed \
-    --allow-unauthenticated \
+    --no-allow-unauthenticated \
+    --iap \
+    --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+    --add-cloudsql-instances "$CLOUD_SQL_INSTANCE" \
+    --set-secrets "DATABASE_URL=${DATABASE_SECRET}" \
     --memory 512Mi \
     --timeout 300 \
     --max-instances 5 \
+    --min-instances 1 \
+    --no-cpu-throttling \
     --env-vars-file "$ENV_FILE" \
     --quiet
+
+gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+    --region "$REGION" \
+    --member="serviceAccount:service-${PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com" \
+    --role=roles/run.invoker --quiet
 
 # ── 7. 배포 URL 출력 ──
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" --region "$REGION" --format="value(status.url)")
@@ -85,5 +69,5 @@ echo ""
 echo "═══════════════════════════════════════════"
 echo "  ✅ 배포 완료!"
 echo "  🌐 URL: $SERVICE_URL"
-echo "  📋 이 URL을 팀원에게 공유하세요"
+echo "  📋 IAP 접근 권한이 있는 팀원만 사용할 수 있습니다"
 echo "═══════════════════════════════════════════"

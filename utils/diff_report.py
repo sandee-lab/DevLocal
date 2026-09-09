@@ -1,6 +1,7 @@
 """Diff 리포트 CSV 생성 — 한국어 교정 / 번역 변경 리포트"""
 
 import io
+from collections import defaultdict, deque
 
 import pandas as pd
 
@@ -17,13 +18,16 @@ def generate_ko_diff_report(
 
     변경된 행만 포함. 반환: (DataFrame, csv_bytes)
     """
-    original_map = {r["Key"]: r.get("Korean(ko)", "") for r in original_rows}
+    original_map = defaultdict(deque)
+    for row in original_rows:
+        original_map[row.get("row_index", row["Key"])].append(row.get("Korean(ko)", ""))
 
     diff_records = []
     for row in revised_rows:
         key = row.get("Key", "")
         revised = row.get("Korean(ko)", "")
-        original = original_map.get(key, "")
+        originals = original_map[row.get("row_index", key)]
+        original = originals.popleft() if originals else ""
 
         if original != revised:
             diff_records.append({
@@ -50,8 +54,10 @@ def generate_translation_diff_report(
 
     반환: (DataFrame, csv_bytes)
     """
-    # old_trans와 new_trans를 Key+lang으로 매칭
-    old_map = {(r["Key"], r["lang"]): r.get("old", "") for r in old_trans}
+    # 행 번호 우선, 없는 레거시 호출은 동일 Key의 등장 순서를 보존한다.
+    old_map = defaultdict(deque)
+    for row in old_trans:
+        old_map[(row.get("row_index", row["Key"]), row["lang"])].append(row.get("old", ""))
 
     diff_records = []
     for row in new_trans:
@@ -59,7 +65,8 @@ def generate_translation_diff_report(
         lang = row.get("lang", "")
         new_val = row.get("new", "")
         reason = row.get("reason", "")
-        old_val = old_map.get((key, lang), "")
+        originals = old_map[(row.get("row_index", key), lang)]
+        old_val = originals.popleft() if originals else ""
 
         diff_records.append({
             "Key": key,

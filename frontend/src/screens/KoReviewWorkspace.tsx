@@ -141,7 +141,7 @@ export default function KoReviewWorkspace() {
         const dk = item.row_index != null ? `ri_${item.row_index}` : item.key;
         if (!koDecisions[dk]) setKoDecision(dk, "accepted");
       }
-      await approveKo(sessionId, { decision: "approved" });
+      await approveKo(sessionId, { decision: "approved", decisions: koDecisions });
       setCurrentStep("translating");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Approval failed");
