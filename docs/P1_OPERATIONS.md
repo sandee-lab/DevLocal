@@ -38,20 +38,52 @@ Cloud Run의 직접 IAP 활성화와 JWT audience 형식은 [Google Cloud의 IAP
 
 기존 메모리 세션은 새 버전으로 자동 이전되지 않는다. 최초 운영 전환 전에 진행 중인 작업을 완료해야 한다. DB에는 세션과 실행별 체크포인트가 계속 남으므로 운영 보관 기간과 DB 백업 정책을 설정해야 한다. 자동 세션 삭제는 도입하지 않았다.
 
+## 과도기 구성 — 인증만 먼저 적용 (현재 선택)
+
+Cloud SQL 준비 전에 인증부터 적용하기로 했다. 두 P1 중 공개 배포 쪽이 더 급하다고 판단했다.
+인증 없는 상태에서는 URL을 아는 누구나 `GET /api/config`로 Glossary·게임 시놉시스를 읽고
+`PUT /api/config`로 덮어쓸 수 있으며, 시트가 연결된 인스턴스에서는 시트 URL까지 노출된다.
+반면 세션 공유 문제는 이미 지금 운영에도 존재하므로, 이 구성으로 새로 나빠지는 것은 없다.
+
+`DATABASE_SECRET`과 `CLOUD_SQL_INSTANCE`를 지정하지 않으면 `deploy.sh`가 이 구성으로 배포한다.
+
+| 항목 | 과도기 구성 | 공유 저장소 구성 |
+|---|---|---|
+| 인증 | IAP (동일) | IAP |
+| 세션·설정 저장 | 프로세스 메모리와 `.app_config.json` | PostgreSQL |
+| `max-instances` | 1 | 5 |
+| 인스턴스 교체 시 | 진행 중 세션과 UI 설정 변경 유실 | 복구 |
+| Cloud SQL 비용 | 없음 | 발생 |
+
+앱은 `SESSION_STORE=memory`가 있을 때만 공유 저장소 없이 기동한다. 이 선언이 없는데
+`DATABASE_URL`도 없으면 기동에 실패한다. `DATABASE_URL` 설정을 빠뜨린 사고와 의도적인
+단일 인스턴스 운영을 구분하기 위한 것이며, 조용히 메모리로 폴백하지 않는다.
+
+공유 저장소로 넘어갈 판단 기준은 다음과 같다.
+
+- 동시에 번역을 돌리는 사람이 늘어 한 인스턴스로 부족해질 때
+- 인스턴스 교체로 진행 중 작업이 끊기는 일이 실제로 발생할 때
+- UI에서 바꾼 설정이 사라지는 것이 문제가 될 때
+
+전환은 준비를 마친 뒤 `DATABASE_SECRET`과 `CLOUD_SQL_INSTANCE`를 지정해 다시 배포하면 된다.
+`deploy.sh`가 `SESSION_STORE`를 넘기지 않고 DB 연결을 추가하므로 코드 변경은 필요 없다.
+
 ## 운영 적용 전 준비
 
-1. Cloud SQL PostgreSQL에 앱 전용 데이터베이스·사용자를 준비한다. 앱 사용자는 해당 DB의 애플리케이션 테이블과 체크포인터 스키마를 만들고 읽고 쓸 수 있어야 한다. DB 접속 문자열은 Secret Manager에 저장한다.
-2. 런타임 서비스 계정에 해당 Secret의 `roles/secretmanager.secretAccessor`와 Cloud SQL 연결을 위한 `roles/cloudsql.client` 권한을 부여한다.
-3. Cloud Run 서비스의 IAP 접근 정책에 팀의 Google 그룹 또는 사용자를 등록한다. 필요한 역할은 `roles/iap.httpsResourceAccessor`이다. 조직이 없는 프로젝트나 외부 계정은 최초 OAuth 설정이 필요할 수 있으므로 Cloud Console에서 확인한다.
-4. 설정 관리자의 실제 이메일 목록을 정한다. IAP 접근 권한과 관리자 이메일 등록은 별개다.
+1. Cloud Run 서비스의 IAP 접근 정책에 팀의 Google 그룹 또는 사용자를 등록한다. 필요한 역할은 `roles/iap.httpsResourceAccessor`이다. 조직이 없는 프로젝트나 외부 계정은 최초 OAuth 설정이 필요할 수 있으므로 Cloud Console에서 확인한다.
+2. 설정 관리자의 실제 이메일 목록을 정한다. IAP 접근 권한과 관리자 이메일 등록은 별개다.
+3. 런타임 서비스 계정을 정한다. 공유 저장소를 함께 적용한다면 아래 4번의 권한이 필요하다.
+4. (공유 저장소 구성일 때만) Cloud SQL PostgreSQL에 앱 전용 데이터베이스·사용자를 준비한다. 앱 사용자는 해당 DB의 애플리케이션 테이블과 체크포인터 스키마를 만들고 읽고 쓸 수 있어야 한다. DB 접속 문자열은 Secret Manager에 저장하고, 런타임 서비스 계정에 해당 Secret의 `roles/secretmanager.secretAccessor`와 Cloud SQL 연결을 위한 `roles/cloudsql.client` 권한을 부여한다.
 5. 아래 배포 변수를 지정하고 변경 내용을 검토한 뒤 `deploy.sh`를 실행한다.
 
-| 배포 변수 | 의미 |
-|---|---|
-| `DATABASE_SECRET` | DB 접속 문자열 Secret의 `이름:버전` |
-| `CLOUD_SQL_INSTANCE` | `project:region:instance` 연결 이름 |
-| `RUNTIME_SERVICE_ACCOUNT` | 위 권한을 가진 런타임 서비스 계정 이메일 |
-| `ADMIN_EMAILS` | 설정 관리자 이메일, 쉼표 구분 |
+| 배포 변수 | 필수 | 의미 |
+|---|---|---|
+| `RUNTIME_SERVICE_ACCOUNT` | 필수 | 런타임 서비스 계정 이메일 |
+| `ADMIN_EMAILS` | 필수 | 설정 관리자 이메일, 쉼표 구분 |
+| `DATABASE_SECRET` | 선택 | DB 접속 문자열 Secret의 `이름:버전` |
+| `CLOUD_SQL_INSTANCE` | 선택 | `project:region:instance` 연결 이름 |
+
+선택 변수 두 개를 **함께** 지정하면 공유 저장소 구성으로, 지정하지 않으면 과도기 구성으로 배포한다.
 
 DB 접속 문자열의 예시 형식은 `postgresql://USER:ENCODED_PASSWORD@/DATABASE?host=/cloudsql/PROJECT:REGION:INSTANCE`이다. 비밀번호의 특수문자는 URL 인코딩한다. 연결 문자열이나 비밀 값을 저장소에 커밋하지 않는다.
 
@@ -59,7 +91,7 @@ DB 접속 문자열의 예시 형식은 `postgresql://USER:ENCODED_PASSWORD@/DAT
 
 백그라운드 작업 실행을 위해 최소 인스턴스 1개와 상시 CPU 할당을 사용한다. Cloud SQL과 함께 기존 요청 기반 실행보다 유휴 비용이 늘어난다. 최대 인스턴스 수는 기존 5개를 유지한다.
 
-Cloud Run에서 DB 주소, IAP audience, 관리자 목록이 빠지거나 로컬 인증 모드를 사용하면 앱 시작이 실패한다. 준비가 끝나기 전에 기존 운영 서비스에 이 버전을 배포하지 않는다.
+Cloud Run에서 IAP audience나 관리자 목록이 빠지거나 로컬 인증 모드를 사용하면 앱 시작이 실패한다. DB 주소는 `SESSION_STORE=memory`를 명시한 과도기 구성에서만 생략할 수 있고, 선언 없이 빠지면 마찬가지로 기동에 실패한다. IAP 접근 정책 준비가 끝나기 전에 기존 운영 서비스에 이 버전을 배포하지 않는다.
 
 ## 기존 설정 이전과 로컬 실행
 

@@ -22,6 +22,11 @@ def main():
         "IAP_AUDIENCE": os.environ["IAP_AUDIENCE"],
         "ADMIN_EMAILS": os.environ["ADMIN_EMAILS"],
     }
+    # 공유 저장소 없이 배포할 때만 설정된다. DATABASE_SECRET을 지정하면 deploy.sh가
+    # 이 값을 넘기지 않으므로, Postgres 전환 시 별도 정리가 필요 없다.
+    session_store = os.environ.get("SESSION_STORE")
+    if session_store:
+        env["SESSION_STORE"] = session_store
     Path(sys.argv[1]).write_text(
         "\n".join(f"{key}: {json.dumps(value)}" for key, value in env.items()) + "\n", encoding="utf-8",
     )

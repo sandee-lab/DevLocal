@@ -18,12 +18,29 @@ if ! command -v gcloud &> /dev/null; then
 fi
 
 # ── 2. 공유 저장소·접근 제어 사전 설정 ──
-# DB/Secret/IAP 사용자 권한은 docs/P1_OPERATIONS.md에 따라 먼저 준비한다.
-: "${DATABASE_SECRET:?DATABASE_URL을 저장한 Secret 이름:버전을 지정하세요}"
-: "${CLOUD_SQL_INSTANCE:?project:region:instance 형식으로 지정하세요}"
-: "${RUNTIME_SERVICE_ACCOUNT:?DB 및 Secret 접근 권한이 있는 서비스 계정을 지정하세요}"
+# IAP 사용자 권한은 docs/P1_OPERATIONS.md에 따라 먼저 준비한다.
+: "${RUNTIME_SERVICE_ACCOUNT:?Secret 접근 권한이 있는 서비스 계정을 지정하세요}"
 : "${ADMIN_EMAILS:?설정 관리자의 이메일을 쉼표로 구분하여 지정하세요}"
 export ADMIN_EMAILS
+
+# DB는 선택 사항이다. DATABASE_SECRET과 CLOUD_SQL_INSTANCE를 함께 지정하면
+# 공유 PostgreSQL 모드로, 지정하지 않으면 단일 인스턴스 메모리 모드로 배포한다.
+# 메모리 모드는 인증(IAP)만 먼저 적용하기 위한 과도기 구성이다 — P1_OPERATIONS.md 참조.
+if [ -n "${DATABASE_SECRET:-}" ] && [ -n "${CLOUD_SQL_INSTANCE:-}" ]; then
+    STORE_ARGS=(
+        --add-cloudsql-instances "$CLOUD_SQL_INSTANCE"
+        --set-secrets "DATABASE_URL=${DATABASE_SECRET}"
+    )
+    MAX_INSTANCES=5
+    echo "🗄️  공유 PostgreSQL 모드 (max-instances=${MAX_INSTANCES})"
+else
+    # 이전 리비전에 남은 DB 연결·Secret을 명시적으로 제거해 구성이 섞이지 않게 한다.
+    STORE_ARGS=(--clear-cloudsql-instances --clear-secrets)
+    MAX_INSTANCES=1
+    export SESSION_STORE=memory
+    echo "⚠️  공유 저장소 없이 배포합니다 (max-instances=${MAX_INSTANCES})"
+    echo "    인스턴스가 교체되면 진행 중 세션과 UI에서 변경한 설정이 유실됩니다."
+fi
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')
 export IAP_AUDIENCE="/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${SERVICE_NAME}"
 ENV_FILE=$(mktemp)
@@ -59,11 +76,10 @@ gcloud run deploy "$SERVICE_NAME" \
     --no-allow-unauthenticated \
     --iap \
     --service-account "$RUNTIME_SERVICE_ACCOUNT" \
-    --add-cloudsql-instances "$CLOUD_SQL_INSTANCE" \
-    --set-secrets "DATABASE_URL=${DATABASE_SECRET}" \
+    "${STORE_ARGS[@]}" \
     --memory 512Mi \
     --timeout 300 \
-    --max-instances 5 \
+    --max-instances "$MAX_INSTANCES" \
     --min-instances 1 \
     --no-cpu-throttling \
     --env-vars-file "$ENV_FILE" \

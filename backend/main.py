@@ -35,7 +35,18 @@ async def lifespan(app: FastAPI):
     validate_auth_environment()
     database_url = os.environ.get("DATABASE_URL")
     if os.environ.get("K_SERVICE") and not database_url:
-        raise RuntimeError("Cloud Run에서는 공유 PostgreSQL DATABASE_URL이 필요합니다")
+        # 공유 저장소 없이 운영하려면 명시적으로 선언해야 한다. 조용한 폴백은 금지 —
+        # DATABASE_URL 설정을 빠뜨린 사고와, 인증만 먼저 적용하는 의도적인 단일
+        # 인스턴스 운영을 구분하기 위해서다.
+        if os.environ.get("SESSION_STORE") != "memory":
+            raise RuntimeError(
+                "Cloud Run에서는 공유 PostgreSQL DATABASE_URL이 필요합니다. "
+                "공유 저장소 없이 단일 인스턴스로 운영하려면 SESSION_STORE=memory를 설정하세요"
+            )
+        logger.warning(
+            "공유 저장소 없이 기동 — max-instances=1 전제. 인스턴스가 교체되면 "
+            "진행 중인 세션과 UI에서 변경한 설정이 유실됩니다"
+        )
     store = None
     try:
         if database_url:
