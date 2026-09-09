@@ -33,6 +33,9 @@ cd frontend && npm run lint                     # ESLint
 - Vite `/api` → `localhost:8000` 프록시 (`vite.config.ts`)
 - 테스트 프레임워크 미설정 (pytest, vitest 없음)
 - Dockerfile: 멀티스테이지 (Node 22 → Python 3.11-slim), Cloud Run 단일 컨테이너
+- **배포 의존성은 `backend/constraints.txt`로 고정** — requirements.txt는 `>=`만 선언하므로
+  이것이 없으면 배포할 때마다 전 의존성이 최신으로 밀린다. 의존성을 의도적으로 올릴 때는
+  로컬 venv에서 먼저 검증한 뒤 이 파일을 재생성할 것 (파일 헤더에 절차 있음)
 
 ## 핵심 규칙
 - 타겟 언어는 `SUPPORTED_LANGUAGES`(config/constants.py)가 단일 출처 — 시트에 해당 컬럼(`English(en)`/`Japanese(ja)`/`Chinese_CN(zh-CN)`/`Chinese_TW(zh-TW)`)이 존재하는 언어만 자동 번역 (타겟 컬럼은 필수 아님, 프론트는 빈 target_languages 전송)
