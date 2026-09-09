@@ -29,7 +29,19 @@ export IAP_AUDIENCE="/projects/${PROJECT_NUMBER}/locations/${REGION}/services/${
 ENV_FILE=$(mktemp)
 chmod 600 "$ENV_FILE"
 trap 'rm -f "$ENV_FILE"' EXIT
-python3 scripts/deployment_env.py "$ENV_FILE"
+# venv의 python을 쓴다 — 이 스크립트는 python-dotenv가 필요한데, 맨몸 python3는
+# 이 머신에서 3.13을 가리키며 프로젝트 의존성이 없다 (run_dev.sh와 같은 처리).
+VENV="${VENV:-$HOME/.venvs/devlocal}"
+if [ -x "$VENV/Scripts/python.exe" ]; then
+    PY="$VENV/Scripts/python.exe"          # Windows
+elif [ -x "$VENV/bin/python" ]; then
+    PY="$VENV/bin/python"                  # macOS / Linux
+else
+    echo "❌ venv를 찾을 수 없습니다 — $VENV" >&2
+    echo "   run_dev.sh의 안내에 따라 venv를 먼저 만드세요." >&2
+    exit 1
+fi
+"$PY" scripts/deployment_env.py "$ENV_FILE"
 
 # ── 4. GCP 프로젝트 설정 ──
 gcloud config set project "$PROJECT_ID" --quiet
